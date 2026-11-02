@@ -169,9 +169,15 @@ html[data-theme="light"] .seg button.on{color:#04211c}
 .lives i.off{background:var(--line);transform:scale(.72)}
 
 .play-area{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;position:relative}
-.play-area.has-vkb .flow-wrap{padding-bottom:172px}
-.play-area.has-vkb .hint-line{bottom:164px}
-.play-area.has-vkb .flow{top:26%}
+/* 虚拟键盘显示时：词流与提示行都要避开键盘区域。
+   注意：.flow 是绝对定位，top 的百分比按 .flow-wrap 的 padding box 计算 ——
+   所以不能靠加大 padding-bottom 来"腾空间"，那反而会把包含块撑高、把词流往下推。
+
+   方案：统一改用 bottom 锚定 —— 词流底部永远贴在键盘上沿 6px 处，
+   无论词流有多高、视口有多矮，都不可能压到键盘。 */
+.play-area.has-vkb .flow-wrap{padding-bottom:0}
+.play-area.has-vkb .flow{top:auto;bottom:calc(var(--vkb-h, 202px) + 6px)}
+.play-area.has-vkb .hint-line{bottom:calc(var(--vkb-h, 202px) + 10px)}
 .combo-wrap{
   position:absolute;top:14px;right:22px;z-index:6;text-align:right;pointer-events:none;
   transition:opacity .3s;
@@ -452,6 +458,46 @@ canvas{width:100%;display:block;border-radius:8px}
 .vkb-key:active{transform:scale(.93);background:var(--acc);color:#04211c;border-color:transparent}
 .vkb-key.wide{flex:1.6 1 0;max-width:82px;font-size:12px}
 .vkb-key.sp{flex:4 1 0;max-width:none}
+/* 键盘不得撑爆容器 —— 否则溢出的部分会被 overflow:hidden 裁掉（表现为"少一行"） */
+.vkb{max-height:64%;overflow-y:auto;overscroll-behavior:contain}
+/* 紧凑模式：横屏/矮视口下压缩键盘，给词流留出空间 */
+.vkb.compact{padding:4px 4px 5px;gap:3px}
+.vkb.compact .vkb-row{gap:3px}
+.vkb.compact .vkb-key{height:29px;font-size:12.5px;border-radius:6px}
+.vkb.compact .vkb-key.wide{font-size:10.5px}
+.vkb.compact .vkb-tip{display:none}
+/* 极紧凑：手机横屏（视口可能只有 240~320px 高）—— 键盘再压一档，
+   否则会吃掉 3/4 屏幕，词流完全没地方放 */
+.vkb.tiny{padding:2px 3px 3px;gap:1px;max-height:74%}
+.vkb.tiny .vkb-row{gap:1px}
+.vkb.tiny .vkb-key{height:18px;font-size:10px;border-radius:4px}
+.vkb.tiny .vkb-key.wide{font-size:8px;max-width:44px}
+.vkb.tiny .vkb-key.sp{font-size:8.5px}
+/* 超矮视口：提示行与词流位置冲突（都会贴在键盘上沿），此时隐藏提示行 */
+.play-area.has-vkb.short-view .hint-line{display:none}
+
+/* 超矮视口（手机横屏）：压缩 HUD 与词流字号，把纵向空间让给游戏区 */
+@media (max-height:420px){
+  .topbar{padding:3px 12px;min-height:0}
+  .brand .sub{display:none}
+  /* HUD 浮起来 —— 横屏时垂直空间极度紧张，HUD 必须让位给词流 */
+  .hud{
+    position:absolute;top:40px;right:10px;left:auto;z-index:8;
+    padding:3px 10px;gap:9px;border:1px solid var(--line);border-radius:10px;
+    background:var(--glass);
+  }
+  .hud .sp{display:none}
+  .metric{min-width:44px}
+  .metric .v{font-size:13px}
+  .metric.big .v{font-size:16px}
+  .metric .k{font-size:8px;letter-spacing:.4px}
+  .cn-char{font-size:20px} .en-row{font-size:17px}
+  .py-row{font-size:10px}
+  .combo-num{font-size:24px}
+  .combo-wrap{top:78px;right:12px}
+  .hint-line{font-size:9.5px;left:12px}
+  .icon-btn{width:26px;height:26px;font-size:12px}
+}
 .vkb-tip{text-align:center;font-size:10.5px;color:var(--dim2);padding-top:1px}
 
 /* ============ 无障碍 / 色盲友好 ============ */
@@ -1794,6 +1840,9 @@ function showView(v){
   CUR_VIEW=v;
   $$(".view").forEach(el=>el.classList.toggle("on",el.id==="v"+v));
   $$("#tabbar button[data-v]").forEach(el=>el.classList.toggle("on",el.dataset.v===v));
+  // 每个视图都要重新渲染 —— 否则从结算页/其它页切回来时，
+  // XP、星尘、等级、徽章等全是旧值（玩家看到的"不刷新"）
+  if(v==="Home")  renderHome();
   if(v==="Skill") renderTree();
   if(v==="Ach")   renderAch();
   if(v==="Stat")  renderStats();
@@ -2279,7 +2328,29 @@ function renderFlow(){
     if(u.lang!=="cn") u.lang="en";
   }
   const start=Math.max(0,G.idx-1);
-  const end=Math.min(G.units.length,G.idx+4);
+  // 预览窗口大小按可用高度自适应：
+  // 虚拟键盘会占掉底部一大块空间，屏幕又矮时，固定 4 个词会压到键盘下面。
+  // 注意要直接判断键盘是否处于开启状态 —— 不能依赖 has-vkb 类，
+  // 因为首次 renderFlow 可能早于 updateVkbVisibility 执行。
+  let win=4;
+  try{
+    const kb=$("#vkb");
+    const vkbOn=kb && kb.classList.contains("on");
+    if(vkbOn){
+      const host=flow.parentElement;
+      // 键盘覆盖在 flow-wrap 下半部分 → 可用高度 = 容器高 − 键盘实际高度（实测值）
+      const kbH=kb.getBoundingClientRect().height||0;
+      const hostH=(host?host.clientHeight:0);
+      const avail=Math.max(90,hostH-kbH-24);
+      win=Math.max(1,Math.min(4,Math.floor(avail/78)));
+    }
+  }catch(e){}
+  // 极矮视口：只留当前词 —— 一个词都放不下时，预览词更没空间
+  try{
+    const area=$("#playArea");
+    if(area && area.classList.contains("short-view")) win=1;
+  }catch(e){}
+  const end=Math.min(G.units.length,G.idx+win);
   for(let i=start;i<end;i++){
     const u=G.units[i];
     const el=document.createElement("div");
@@ -2321,11 +2392,24 @@ function renderFlow(){
     }
     flow.appendChild(el);
   }
-  // 位置：当前单元滚动到 .flow 顶部基准线（.flow 自身已锚定在容器 38% 高度处）
+  // 位置：把当前词滚到可见区域。
+  // 两种锚定方式要区别对待：
+  //   · 无虚拟键盘 —— .flow 用 top 锚定，当前词固定在 flow 顶部（保持原有的"当前词最显眼"观感）
+  //   · 有虚拟键盘 —— .flow 用 bottom 锚定在键盘上沿，此时只需在当前词超出容器时上移，
+  //     否则 translateY 会把整条词流推离键盘、留出无意义空白
   const curEl=flow.querySelector(".unit.cur");
+  const area=$("#playArea");
+  const hasVkb=!!(area && area.classList.contains("has-vkb"));
   if(curEl){
-    const off=curEl.offsetTop;
-    flow.style.transform=`translateY(${-off}px)`;
+    let shift=0;
+    if(hasVkb){
+      const flowH=flow.offsetHeight||0;
+      const curBottom=curEl.offsetTop+curEl.offsetHeight;
+      if(curBottom>flowH) shift=curBottom-flowH;
+    }else{
+      shift=curEl.offsetTop;
+    }
+    flow.style.transform=`translateY(${-shift}px)`;
   }
   markTyped();
   updateHints();
@@ -3600,7 +3684,10 @@ function openSettings(){
     <div class="set-row"><div><div class="t">减少动画</div><div class="d">关闭粒子、震动等动效（也会遵循系统「减弱动态效果」设置）</div></div>
       <button type="button" class="switch ${s.reduceMotion?"on":""}" data-k="reduceMotion"><i></i></button></div>
     <div class="set-row" style="display:block">
-      <div style="margin-bottom:10px"><div class="t">皮肤</div><div class="d">用星尘解锁不同配色</div></div>
+      <div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <div><div class="t">皮肤</div><div class="d">用星尘解锁不同配色</div></div>
+        <div id="skinBalance" style="font-size:12.5px;font-weight:700;color:var(--gold);white-space:nowrap"></div>
+      </div>
       <div class="skins" id="skinWrap"></div>
     </div>
     <div style="display:flex;gap:10px;margin-top:18px">
@@ -3650,6 +3737,9 @@ function openSettings(){
   });
   const sw=body.querySelector("#skinWrap");
   const owned=S().skins||["storm"];
+  // 展示当前星尘余额 —— 玩家买皮肤前需要知道有多少钱
+  const bal=body.querySelector("#skinBalance");
+  if(bal) bal.innerHTML=`✦ <b>${fmt(S().coins)}</b> 星尘`;
   for(const sk of SKINS){
     const el=document.createElement("button");
     const has=owned.includes(sk.id);
@@ -3965,25 +4055,22 @@ function vkbEnabled(){
   return isTouchDevice();
 }
 function vkbRows(){
-  const initialMode=(STORE.settings.pyMode||"full")==="initial";
-  const rows=[];
-  if(G.lang==="en"){
-    rows.push(VKB_QWERTY[0],VKB_QWERTY[1],VKB_QWERTY[2]);
-  } else if(initialMode){
-    // 首字母模式：只需要字母首字母，布局更紧凑
-    rows.push(["a","b","c","d","e","f","g","h","i","j"],["k","l","m","n","o","p","q","r","s","t"],
-              ["u","v","w","x","y","z"]);
-  } else {
-    // 全拼模式：常用韵母/声母组合，提升单键命中率
-    rows.push(["a","e","i","o","u","b","p","m","f","d"],["t","n","l","g","h","k","j","q","x","r"],
-              ["s","z","c","y","w","v"]);
-  }
-  return rows;
+  // 中英文统一使用标准 QWERTY 布局。
+  // 理由：虚拟键盘的按键位置与物理键盘一致时，手指移动路径相同，
+  //      玩家能把物理键盘的肌肉记忆迁移过来，不至于"看着屏幕找字母"。
+  //      （早期版本中文按韵母声母重排，实测反而增加了视觉搜索成本。）
+  return [VKB_QWERTY[0], VKB_QWERTY[1], VKB_QWERTY[2]];
 }
 function renderVkb(){
   const box=$("#vkb");
   if(!box) return;
   box.innerHTML="";
+  // 横屏/矮视口时压缩键盘 —— 否则键盘会占掉半个屏幕，词流无处安放
+  try{
+    const ih=(window.innerHeight||800);
+    box.classList.toggle("compact", ih<520);
+    box.classList.toggle("tiny", ih<340);
+  }catch(e){}
   const rows=vkbRows();
   for(const row of rows){
     const rd=document.createElement("div");
@@ -4039,7 +4126,18 @@ function updateVkbVisibility(){
   box.classList.toggle("on", need);
   const area=$("#playArea");
   if(area) area.classList.toggle("has-vkb", need);
-  if(need) renderVkb();
+  if(need){
+    renderVkb();
+    // 记录键盘实际高度，供 CSS 变量使用（提示行据此上移）
+    try{
+      const h=Math.round(box.getBoundingClientRect().height);
+      if(h>0) area.style.setProperty("--vkb-h", h+"px");
+      // 视口过矮时（手机横屏），词流改为底部锚定，永久压在键盘上方
+      area.classList.toggle("short-view", (window.innerHeight||800)<520);
+    }catch(e){}
+    // 键盘状态变化会改变可用高度 → 重新布局词流（预览窗口大小依赖它）
+    if(G.on && G.units.length) { try{ renderFlow(); }catch(e){} }
+  }
 }
 
 /* ------------------------------------------------------------ 手指分区 */

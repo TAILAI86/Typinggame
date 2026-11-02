@@ -2240,6 +2240,8 @@ function customFinished(){
 
 /* -------------------------------------------------------------- 开始游戏 */
 function startGame(dailyCfg){
+  // 兼容调用：直接传入模式字符串（如 startGame('precision')）等价于先设置 CONFIG.mode
+  if(typeof dailyCfg==="string"){ CONFIG.mode=dailyCfg; dailyCfg=null; }
   Audio2.init();
   // 用户已开始游戏 → 不再自动弹引导（避免打断正在进行的对局）
   if(!guideSeen()){
@@ -3406,7 +3408,7 @@ function renderHome(){
     const modes=["sprint","survival","combo","climb"];   // 不含 precision（需限定条件）
     const cfg={ mode:modes[Math.floor(r()*modes.length)], diff:DIFFS[Math.floor(r()*4)].id,
                 lang: r()<0.6?"cn":"en", seed: hashStr(todayKey()+"#ts") };
-    if(cfg.mode==="climb") cfg.mode="sprint";
+    /* climb 模式自带十关终点，允许作为每日挑战模式，不再强行降级为 sprint */
     dc.cfg=cfg; dc.date=todayKey(); dc.done=false; dc.best=0;
     saveStore();
   }
@@ -4991,8 +4993,8 @@ function bind(){
   });
   // 多标签页并发：其他标签页改了存档时提示，避免静默覆盖
   window.addEventListener("storage",e=>{
-    if(!e||e.key!==STORE_KEY) return;
-    const cur=localStorage.getItem(STORE_KEY);
+    if(!e||e.key!==SAVE_KEY) return;
+    const cur=localStorage.getItem(SAVE_KEY);
     if(!cur) return;
     try{
       const other=JSON.parse(cur);
@@ -5006,6 +5008,11 @@ function bind(){
       }
     }catch(e){}
   });
+  // 离开页面（切到后台 / 锁屏）自动暂停，避免对局在不可见时继续计时
+  document.addEventListener("visibilitychange",()=>{
+    if(document.hidden && G.on && !G.paused) togglePause();
+  });
+  window.addEventListener("blur",()=>{ if(G.on && !G.paused && !_modalStack.length) togglePause(); });
   $("#btnStart").onclick=()=>startGame();
   $("#btnDaily").onclick=()=>startGame(STORE.daily.cfg);
   $("#btnDaily2").onclick=()=>startGame(STORE.daily.cfg);

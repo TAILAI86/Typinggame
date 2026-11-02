@@ -612,6 +612,98 @@ body.reduce-motion *,body.reduce-motion *::before,body.reduce-motion *::after{
 .pi-desc{font-size:11.5px;color:var(--dim2);line-height:1.65;margin-bottom:9px}
 .pi-go{padding:6px 14px;font-size:12px}
 
+/* ============ 护眼模式 / 专注模式 ============ */
+/* 护眼：给页面叠加一层暖色滤镜，降低蓝光 —— 长时间练习眼睛不易疲劳 */
+body.eye-care #app{filter:sepia(.28) saturate(.92) brightness(1.04)}
+body.eye-care .topbar,body.eye-care .tabbar,body.eye-care .hud{-webkit-backdrop-filter:none;backdrop-filter:none}
+/* 专注模式：隐藏一切无关 UI，只留词流 —— 适合长时间沉浸练习 */
+body.focus-mode .topbar,
+body.focus-mode .tabbar,
+body.focus-mode .hud,
+body.focus-mode .combo-wrap,
+body.focus-mode .hint-line,
+body.focus-mode .vkb,
+body.focus-mode .danger-edge{display:none !important}
+body.focus-mode .play-area{padding:0}
+body.focus-mode .flow{top:50% !important;transform:translateY(-50%) !important}
+body.focus-mode .flow-wrap{padding:40px 40px 60px}
+/* 专注模式下提供一条极简的状态条（不干扰，但让人知道还在游戏里） */
+.focus-bar{
+  position:fixed;left:0;right:0;bottom:0;z-index:40;display:none;
+  align-items:center;justify-content:center;gap:18px;
+  padding:6px 12px;font-size:11.5px;color:var(--dim2);
+  background:linear-gradient(0deg,rgba(0,0,0,.28),transparent);
+}
+body.focus-mode .focus-bar{display:flex}
+.focus-bar .fb-btn{
+  background:none;border:none;color:var(--dim2);font-size:11.5px;cursor:pointer;
+  padding:3px 9px;border-radius:6px;font-family:inherit;
+}
+.focus-bar .fb-btn:hover{color:var(--acc);background:rgba(56,225,196,.12)}
+
+/* 键位高亮：在词流中标出下一个要敲的键 */
+.heat-key-hint{
+  border-radius:4px;padding:0 1px;
+  box-shadow:0 0 0 1.5px var(--acc) inset, 0 0 12px rgba(56,225,196,.35);
+  background:rgba(56,225,196,.14);
+}
+
+/* ============ 签到面板 ============ */
+.goal-done{
+  display:flex;align-items:center;gap:12px;margin:4px 0 16px;padding:12px 15px;
+  border-radius:var(--radius);border:1px solid rgba(56,225,196,.4);background:rgba(56,225,196,.09);
+}
+.gd-ic{font-size:26px;flex:0 0 auto}
+.gd-txt{font-size:13px;color:var(--txt);text-align:left}
+.gd-txt b{color:var(--acc)}
+.gd-sub{font-size:11.5px;color:var(--dim2);margin-top:3px}
+.goal-bar{height:5px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:7px}
+/* 三张"每日"卡并排，宽屏下一屏可见 */
+.daily-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.daily-row .daily{margin-bottom:0}
+/* 已签到 / 已完成的按钮禁用态 —— 明确表达"不可再领" */
+.btn:disabled,.btn[disabled]{
+  opacity:.55;cursor:default;transform:none!important;filter:none!important;
+  border-color:var(--line)!important;color:var(--dim2)!important;
+  background:var(--panel2)!important;box-shadow:none!important;
+}
+.goal-bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--acc),var(--acc2));transition:width .4s}
+.ck-card{background:linear-gradient(120deg,rgba(255,209,102,.10),var(--panel))}
+.goal-card{background:linear-gradient(120deg,rgba(56,225,196,.10),var(--panel))}
+.ck-head{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+.ck-num{font-size:34px;font-weight:900;line-height:1;color:var(--gold);font-family:var(--mono)}
+.ck-num small{font-size:12px;font-weight:700;color:var(--dim2);margin-left:5px;font-family:var(--font)}
+.ck-sub{font-size:11.5px;color:var(--dim2);margin-top:5px}
+.ck-status{font-size:12px;font-weight:700;padding:6px 12px;border-radius:999px;
+  background:var(--panel2);border:1px solid var(--line);color:var(--dim)}
+.ck-status.ok{color:var(--good);border-color:rgba(93,220,122,.4)}
+.ck-status.broken{color:var(--warn);border-color:rgba(255,180,84,.4)}
+.ck-week{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:14px}
+.ck-day{
+  text-align:center;padding:9px 2px;border-radius:10px;
+  background:var(--panel2);border:1px solid var(--line);opacity:.55;
+}
+.ck-day .ck-d{font-size:10px;color:var(--dim2);font-weight:700}
+.ck-day .ck-v{font-size:12.5px;font-weight:800;color:var(--gold);font-family:var(--mono);margin-top:3px}
+.ck-day .ck-x{font-size:9.5px;color:var(--dim2);margin-top:2px}
+.ck-day.got{opacity:1;border-color:rgba(255,209,102,.45);background:rgba(255,209,102,.08)}
+.ck-day.cur{opacity:1;border-color:var(--acc);box-shadow:0 0 0 1px var(--acc) inset}
+.ck-btn{width:100%;margin-bottom:16px}
+.ck-cal{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel2)}
+.ck-cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.ck-cal-head span{font-size:13px;font-weight:700}
+.ck-dow,.ck-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.ck-dow i{text-align:center;font-size:10.5px;color:var(--dim2);font-style:normal;font-weight:700;padding-bottom:3px}
+.ck-grid i{
+  text-align:center;font-style:normal;font-size:12px;padding:7px 0;border-radius:7px;
+  color:var(--dim);background:transparent;position:relative;
+}
+.ck-grid i.on{background:rgba(255,209,102,.18);color:var(--gold);font-weight:800}
+.ck-grid i.on::after{content:"●";font-size:6px;position:absolute;bottom:2px;left:50%;transform:translateX(-50%)}
+.ck-grid i.today{box-shadow:0 0 0 1.5px var(--acc) inset}
+.ck-grid i.future{opacity:.32}
+.ck-grid i.blank{background:transparent}
+
 /* ============ 数据管理面板 ============ */
 .data-report{
   border:1px solid var(--line);border-radius:var(--radius);
@@ -688,6 +780,33 @@ body.reduce-motion *,body.reduce-motion *::before,body.reduce-motion *::after{
           <div class="seg" id="segLang"></div>
         </div>
         <div id="diffTier" style="font-size:12px;color:var(--dim2);margin:-8px 0 14px"></div>
+        <div class="daily-row">
+          <div class="daily">
+            <div class="ic">🎯</div>
+            <div style="flex:1;min-width:0">
+              <div class="tt">每日挑战 · 全服同题</div>
+              <div class="ds" id="dailyDesc">今日词库与难度已锁定，挑战你的最高分</div>
+            </div>
+            <button type="button" class="btn sm" id="btnDaily2">进入</button>
+          </div>
+          <div class="daily ck-card" id="ckCard">
+            <div class="ic">📅</div>
+            <div style="flex:1;min-width:0">
+              <div class="tt" id="ckTitle">每日签到</div>
+              <div class="ds" id="ckDesc">每天来领星尘，连续签到奖励更高</div>
+            </div>
+            <button type="button" class="btn sm" id="btnCheckin">签到</button>
+          </div>
+          <div class="daily goal-card" id="goalCard">
+            <div class="ic">🎯</div>
+            <div style="flex:1;min-width:0">
+              <div class="tt" id="goalTitle">每日目标</div>
+              <div class="ds" id="goalDesc">完成后可获得额外奖励</div>
+              <div class="goal-bar"><i id="goalBar" style="width:0%"></i></div>
+            </div>
+            <span class="chip" id="goalPct">0%</span>
+          </div>
+        </div>
         <div class="row" style="margin-top:20px">
           <button type="button" class="btn pri" id="btnStart" style="font-size:16px;padding:13px 34px">🚀 开始游戏</button>
           <button type="button" class="btn" id="btnDaily">🎯 每日挑战</button>
@@ -702,14 +821,6 @@ body.reduce-motion *,body.reduce-motion *::before,body.reduce-motion *::after{
         <div style="height:18px"></div>
         <div class="modes" id="modeCards"></div>
         <div style="height:16px"></div>
-        <div class="daily">
-          <div class="ic">🎯</div>
-          <div style="flex:1;min-width:0">
-            <div class="tt">每日挑战 · 全服同题</div>
-            <div class="ds" id="dailyDesc">今日词库与难度已锁定，挑战你的最高分</div>
-          </div>
-          <button type="button" class="btn sm" id="btnDaily2">进入</button>
-        </div>
       </div>
     </section>
 
@@ -828,6 +939,10 @@ body.reduce-motion *,body.reduce-motion *::before,body.reduce-motion *::after{
   </nav>
 </div>
 <div class="toast-wrap" id="toasts"></div>
+<div class="focus-bar" id="focusBar">
+  <span id="focusInfo">专注模式</span>
+  <button type="button" class="fb-btn" id="focusExit">退出专注 (Esc)</button>
+</div>
 <div id="modalRoot"></div>
 
 <script>
@@ -954,7 +1069,11 @@ const ACHIEVEMENTS = [
   }},
   { id:"planOpen", ic:"🎯", nm:"对症下药", ds:"查看一次训练处方", chk:s=>flagOf(s,"planOpened") },
   { id:"planAct",  ic:"💊", nm:"知错能改", ds:"按训练处方执行一次专项训练", chk:s=>flagOf(s,"planActed") },
-  { id:"planFix",  ic:"🏅", nm:"对症而愈", ds:"完成一次错词专项复习", chk:s=>flagOf(s,"planFixed") }
+  { id:"planFix",  ic:"🏅", nm:"对症而愈", ds:"完成一次错词专项复习", chk:s=>flagOf(s,"planFixed") },
+  { id:"ckFirst",  ic:"📅", nm:"初次签到", ds:"完成第一次每日签到", chk:s=>((s&&s.flags&&s.flags.ckTotal)||0)>=1 },
+  { id:"ck7",     ic:"🔥", nm:"七日之约", ds:"连续签到 7 天", chk:s=>((s&&s.flags&&s.flags.ckStreak)||0)>=7 },
+  { id:"ck30",    ic:"👑", nm:"月度常客", ds:"累计签到 30 天", chk:s=>((s&&s.flags&&s.flags.ckTotal)||0)>=30 },
+  { id:"goalDone", ic:"🎯", nm:"日拱一卒", ds:"完成一次每日目标", chk:s=>flagOf(s,"goalDone") }
 ];
 const RANKS = [
   { id:"bronze", nm:"青铜", min:0 },{ id:"silver", nm:"白银", min:20 },
@@ -974,6 +1093,136 @@ const esc = s => s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':
 function hashStr(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return h>>>0;}
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 function todayKey(d){d=d||new Date();return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate());}
+
+/* ------------------------------------------------------------ 每日签到 */
+/* 7 天循环签到表：连续签到越久，单次奖励越高；第 7 天给大奖后进入新一轮。
+   断签规则：昨天没签 → 连续天数归零（不惩罚，只是不累计）。
+   不提供补签 —— 免得变成每日打卡任务；但漏签后的提示要说清楚。 */
+const CHECKIN_REWARDS = [
+  { coins:50,   xp:30,  label:"第 1 天" },
+  { coins:80,   xp:50,  label:"第 2 天" },
+  { coins:120,  xp:80,  label:"第 3 天" },
+  { coins:180,  xp:120, label:"第 4 天" },
+  { coins:260,  xp:180, label:"第 5 天" },
+  { coins:400,  xp:280, label:"第 6 天" },
+  { coins:800,  xp:600, label:"第 7 天 · 大奖" }
+];
+
+/* 相对今天的日期键（用于判断是否连续） */
+function dateKeyOffset(offset){
+  const d=new Date();
+  d.setDate(d.getDate()+offset);
+  return todayKey(d);
+}
+/* 今天是否已签到 */
+function checkinDone(){
+  const ci=STORE.checkin||{};
+  return ci.last===todayKey();
+}
+/* 今天是否断签（昨天没签且之前签过） */
+function checkinBroken(){
+  const ci=STORE.checkin||{};
+  if(!ci.last) return false;            // 从没签过，不算断
+  if(checkinDone()) return false;       // 今天已签
+  return ci.last!==dateKeyOffset(-1);    // 昨天没签 → 断
+}
+/* 执行签到，返回奖励信息（已签则返回 null） */
+function doCheckin(){
+  if(checkinDone()) return null;
+  const ci=STORE.checkin||(STORE.checkin={last:"",streak:0,total:0,days:{}});
+  // 连续性判定：昨天签过则 +1，否则从 1 开始
+  ci.streak=(ci.last===dateKeyOffset(-1)) ? (ci.streak||0)+1 : 1;
+  ci.last=todayKey();
+  ci.total=(ci.total||0)+1;
+  ci.days=ci.days||{};
+  ci.days[ci.last]=ci.streak;
+  // 连续满 7 天后进入新一轮（连续天数归零重新累计）
+  let cycleDay=((ci.streak-1)%7)+1;
+  const bonus=(ci.streak>7 && ci.streak%7===1);
+  if(bonus){ ci.streak=1; ci.days[ci.last]=1; }
+  const rw=CHECKIN_REWARDS[cycleDay-1];
+  const s=S();
+  s.coins=(s.coins||0)+rw.coins;
+  s.xp=(s.xp||0)+rw.xp;
+  // 签到记录本身是全局的（防切槽重复领），但把快照写进当前槽的 flags ——
+  // 成就体系按槽判定（每个存档槽有独立成就），这样才读得到。
+  if(!s.flags) s.flags={};
+  s.flags.ckTotal=ci.total;
+  s.flags.ckStreak=ci.streak;
+  let leveled=false;
+  while(s.xp>=lvlNeed(s.lvl)){ s.xp-=lvlNeed(s.lvl); s.lvl++; s.sp++; leveled=true; }
+  saveStore();
+  return { coins:rw.coins, xp:rw.xp, streak:ci.streak, cycleDay, label:rw.label, bonus, leveled };
+}
+/* 本月签到日历数据（按周对齐，前后补空白格） */
+function checkinCalendar(year, month){
+  const ci=STORE.checkin||{};
+  const days=ci.days||{};
+  const lead=new Date(year,month,1).getDay();   // 0=周日
+  const total=new Date(year,month+1,0).getDate();
+  const cells=[];
+  for(let i=0;i<lead;i++) cells.push(null);
+  for(let d=1;d<=total;d++){
+    const key=year+"-"+pad2(month+1)+"-"+pad2(d);
+    cells.push({ day:d, key, signed:!!days[key], streak:days[key]||0,
+                 isToday:key===todayKey(), isFuture:key>todayKey() });
+  }
+  // 末尾补空白，保证每行恰好 7 格
+  while(cells.length%7!==0) cells.push(null);
+  return cells;
+}
+
+/* ------------------------------------------------------------ 每日目标 */
+/* 每天派发一个小目标（按日期种子确定，全服同题），完成后给额外奖励。
+   目标类型：局数 / 字符数 / 准确率 / 最高连击 / 词数 —— 覆盖不同练习侧重点。 */
+const GOAL_TYPES = [
+  { id:"games", nm:"完成 {n} 局游戏",   unit:"局" },
+  { id:"chars", nm:"累计输入 {n} 个字符", unit:"字" },
+  { id:"acc",   nm:"单局准确率达到 {n}%", unit:"%" },
+  { id:"combo", nm:"单局打出 {n} 连击",  unit:"连击" },
+  { id:"words", nm:"累计完成 {n} 个词",  unit:"词" }
+];
+
+function dailyGoal(){
+  const g=STORE.goal||(STORE.goal={date:"",cfg:null,progress:0,done:false});
+  if(g.date!==todayKey() || !g.cfg){
+    const r=mulberry32(hashStr(todayKey()+"#goal"));
+    const t=GOAL_TYPES[Math.floor(r()*GOAL_TYPES.length)];
+    let n=1;
+    if(t.id==="games") n=2+Math.floor(r()*3);            // 2~4 局
+    else if(t.id==="chars") n=300+Math.floor(r()*8)*100; // 300~1000 字
+    else if(t.id==="acc") n=92+Math.floor(r()*7);        // 92~98%
+    else if(t.id==="combo") n=20+Math.floor(r()*6)*10;   // 20~70 连击
+    else if(t.id==="words") n=40+Math.floor(r()*6)*20;   // 40~140 词
+    g.cfg={ type:t.id, n, desc:t.nm.replace("{n}", n) };
+    g.date=todayKey(); g.progress=0; g.done=false;
+    saveStore();
+  }
+  return g;
+}
+
+/* 推进每日目标进度；达标则发奖并标记完成 */
+function updateGoalProgress(kind, value){
+  const g=dailyGoal();
+  if(g.done) return null;
+  const c=g.cfg;
+  let hit=false;
+  if(c.type==="games" && kind==="game"){ g.progress++; hit=g.progress>=c.n; }
+  else if(c.type==="chars" && kind==="chars"){ g.progress+=value; hit=g.progress>=c.n; }
+  else if(c.type==="words" && kind==="words"){ g.progress+=value; hit=g.progress>=c.n; }
+  else if(c.type==="acc" && kind==="acc"){ g.progress=Math.max(g.progress,value); hit=value>=c.n; }
+  else if(c.type==="combo" && kind==="combo"){ g.progress=Math.max(g.progress,value); hit=value>=c.n; }
+  if(!hit){ saveStore(); return null; }
+  // 标记完成 —— 必须在发奖前设置，否则同一目标可被反复领奖
+  g.done=true;
+  const s=S();
+  const coins=150, xp=100;
+  s.coins=(s.coins||0)+coins; s.xp=(s.xp||0)+xp;
+  let leveled=false;
+  while(s.xp>=lvlNeed(s.lvl)){ s.xp-=lvlNeed(s.lvl); s.lvl++; s.sp++; leveled=true; }
+  saveStore();
+  return { coins, xp, leveled, goal:c };
+}
 
 /* ------------------------------------------------------------ 词库解析 */
 const POOLS = {};
@@ -1458,8 +1707,13 @@ function newSlotData(name){
 function defaultStore(){
   return { v:1, active:0, rev:0, savedAt:0, slots:[newSlotData("存档 1"),newSlotData("存档 2"),newSlotData("存档 3")],
            settings:{ sound:true, theme:"dark", particles:true, showPinyin:true, tone:"sine", pyMode:"full", vkb:"auto",
-                      cvd:false, reduceMotion:false, seenGuide:false, imeMode:"auto" },
-           daily:{ date:"", best:0, done:false, cfg:null } };
+                      cvd:false, reduceMotion:false, seenGuide:false, imeMode:"auto",
+                      focusMode:false, eyeCare:false, keyHint:false },
+           daily:{ date:"", best:0, done:false, cfg:null },
+           // 签到：连续天数、最近签到日期、累计签到、历史记录
+           checkin:{ last:"", streak:0, total:0, days:{} },
+           // 每日目标：当日进度与目标定义
+           goal:{ date:"", cfg:null, progress:0, done:false } };
 }
 let STORE = loadStore();
 /* 载入基线快照：多标签页合并时用来计算"本标签页的实际增量"，
@@ -2100,6 +2354,12 @@ function startGame(dailyCfg){
   if(hl) hl.innerHTML=guide+'<span id="hintNext" style="display:none"></span>';
   updateHints();
   updateVkbVisibility();
+  applySettingsToDOM();
+  // 专注模式状态条
+  try{
+    const fi=$("#focusInfo");
+    if(fi) fi.textContent="专注模式 · "+(MODES.find(m=>m.id===G.mode)||{name:"挑战"}).name;
+  }catch(e){}
   G.timer=setInterval(tick,100);
 }
 
@@ -2153,7 +2413,9 @@ window.addEventListener("keydown",e=>{
     return;
   }
   if(G.on){
-    if(e.key==="Escape"){ e.preventDefault(); if(G.paused) togglePause(); else quitGame(); return; }
+    if(e.key==="Escape"){ e.preventDefault(); if(G.paused) togglePause(); else if(STORE.settings.focusMode) toggleFocusMode(false); else quitGame(); return; }
+    // 专注模式快捷键：F2（不与任何字母冲突）
+    if(e.key==="F2"){ e.preventDefault(); toggleFocusMode(); return; }
     if(e.key===" "&&G.paused){ e.preventDefault(); togglePause(); return; }
     if(G.paused) return;                       // 暂停中不处理游戏输入
     // IME 组合期间（候选词未确定）的按键不应计入判定
@@ -2447,6 +2709,43 @@ function markTyped(){
     const bs=cur.querySelectorAll("b");
     bs.forEach((b,i)=>b.className = i<G.ci?"c":(i===G.ci?"cur":""));
   }
+  // 键位高亮：标出下一个要敲的字母
+  if(STORE.settings.keyHint) markNextKey(cur,u);
+}
+/* 在当前单元中标出下一个要按的键 */
+function markNextKey(cur,u){
+  // 清理旧标记
+  cur.querySelectorAll(".heat-key-hint").forEach(el=>{
+    el.classList.remove("heat-key-hint");
+  });
+  const exp=activeInput(u);
+  if(!exp || G.ci>=exp.length) return;
+  const nextCh=exp[G.ci];
+  if(!nextCh || !/[a-zA-Z]/.test(nextCh)) return;
+  // 中文：在拼音音节里找对应字母；英文：直接找对应字母
+  let target=null;
+  if(u.lang==="cn"){
+    const initialMode=(STORE.settings.pyMode||"full")==="initial";
+    let acc=0;
+    for(let k=0;k<u.syl.length;k++){
+      const sylLen= initialMode?1:String(u.syl[k]).length;
+      if(G.ci<acc+sylLen){
+        const pyEls=cur.querySelectorAll(".py-syl");
+        const p=pyEls[k];
+        if(p){
+          const idx=G.ci-acc;
+          const b=p.children[idx];
+          if(b) target=b;
+        }
+        break;
+      }
+      acc+=sylLen;
+    }
+  }else{
+    const bs=cur.querySelectorAll("b");
+    if(bs[G.ci]) target=bs[G.ci];
+  }
+  if(target) target.classList.add("heat-key-hint");
 }
 /* 计算第 k 个音节在输入串中的起始位置 */
 function accOfSyls(syl, initialMode, k){
@@ -2598,6 +2897,78 @@ function favoriteUnits(){
   }));
 }
 /* 打开收藏夹面板 */
+/* ------------------------------------------------------------ 签到面板 */
+function openCheckin(){
+  const body=document.createElement("div");
+  body.className="mask";
+  const now=new Date();
+  let viewY=now.getFullYear(), viewM=now.getMonth();
+  const render=()=>{
+    // 每次重绘都重新读取状态 —— 否则签到后按钮仍显示"可签到"
+    const ci=STORE.checkin||{};
+    const done=checkinDone();
+    const broken=checkinBroken();
+    const streak=ci.streak||0;
+    const cycleDay=(streak%7)+1;      // 今天若签到，将拿到的第几天
+    const cells=checkinCalendar(viewY,viewM);
+    const monthName=viewY+" 年 "+(viewM+1)+" 月";
+    const signed=cells.filter(c=>c&&c.signed).length;
+    body.innerHTML=`<div class="modal" style="max-width:460px">
+      <h3>📅 每日签到</h3>
+      <div class="ck-head">
+        <div class="ck-streak">
+          <div class="ck-num">${streak}<small>天连续</small></div>
+          <div class="ck-sub">累计签到 ${ci.total||0} 天 · 本月已签 ${signed} 天</div>
+        </div>
+        <div class="ck-status ${done?"ok":broken?"broken":""}">
+          ${done?"✅ 今日已签到":broken?"⚠️ 昨天没签，今天重新开始":"🎁 今天还没签"}
+        </div>
+      </div>
+      <div class="ck-week">
+        ${CHECKIN_REWARDS.map((r,i)=>{
+          const day=i+1;
+          const got=done && day<=cycleDay;
+          const cur=!done && day===cycleDay;
+          return `<div class="ck-day ${got?"got":""} ${cur?"cur":""}">
+            <div class="ck-d">${day}</div>
+            <div class="ck-v">✦${r.coins}</div>
+            <div class="ck-x">${r.xp}XP</div>
+          </div>`;
+        }).join("")}
+      </div>
+      <button type="button" class="btn pri ck-btn" id="ckDo" ${done?"disabled":""}>
+        ${done?"今日已签到 ✓":(broken?"签到（重新开始连续记录）":"签到 领取奖励")}
+      </button>
+      <div class="ck-cal">
+        <div class="ck-cal-head">
+          <button type="button" class="icon-btn" id="ckPrev">‹</button>
+          <span>${monthName}</span>
+          <button type="button" class="icon-btn" id="ckNext">›</button>
+        </div>
+        <div class="ck-dow">${["日","一","二","三","四","五","六"].map(d=>`<i>${d}</i>`).join("")}</div>
+        <div class="ck-grid">
+          ${cells.map(c=>c?`<i class="${c.signed?"on":""} ${c.isToday?"today":""} ${c.isFuture?"future":""}" title="${c.signed?("连续 "+c.streak+" 天"):""}">${c.day}</i>`:"<i class=\"blank\"></i>").join("")}
+        </div>
+      </div>
+      <div style="margin-top:14px;text-align:right"><button type="button" class="btn" id="ckClose">关闭</button></div>
+    </div>`;
+    body.querySelector("#ckDo").onclick=()=>{
+      const res=doCheckin();
+      if(!res){ toast("今天已经签过啦"); return; }
+      toast(`📅 签到成功！连续 ${res.streak} 天 · +${res.coins} 星尘 +${res.xp} XP`, "gold");
+      if(res.leveled) setTimeout(()=>toast(`🎊 升级 Lv.${S().lvl}！获得 1 技能点`),700);
+      renderHome();
+      render();
+    };
+    body.querySelector("#ckPrev").onclick=()=>{ viewM--; if(viewM<0){viewM=11;viewY--;} render(); };
+    body.querySelector("#ckNext").onclick=()=>{ viewM++; if(viewM>11){viewM=0;viewY++;} render(); };
+    body.querySelector("#ckClose").onclick=()=>dismissModal(body);
+  };
+  render();
+  mountModal(body);
+  body.onclick=e=>{ if(e.target===body) dismissModal(body); };
+}
+
 function openFavorites(){
   const s=S();
   const body=document.createElement("div");
@@ -2883,7 +3254,15 @@ function endGame(){
     if(!s.ach[a.id] && a.chk(s)){ s.ach[a.id]=Date.now(); unlocked.push(a); }
   }
   saveStore();
-  renderResult({wpm,acc,finalScore,xp,coins,newRec,unlocked,levelUp:s.lvl>before});
+  // 每日目标推进（局数 / 字符 / 准确率 / 连击 / 词数）
+  let goalHit=null;
+  goalHit=updateGoalProgress("game",1);
+  if(!goalHit) goalHit=updateGoalProgress("chars",G.correct);
+  if(!goalHit) goalHit=updateGoalProgress("words",G.words);
+  if(!goalHit) goalHit=updateGoalProgress("acc",acc);
+  if(!goalHit) goalHit=updateGoalProgress("combo",G.maxCombo);
+  if(goalHit){ s.flags.goalDone=true; }
+  renderResult({wpm,acc,finalScore,xp,coins,newRec,unlocked,levelUp:s.lvl>before,goalHit});
   showView("Result");
 }
 function quitGame(){
@@ -2919,6 +3298,16 @@ function renderResult(r){
   if(r.levelUp) html+=`<span class="rw purple">🎊 升级 Lv.${s.lvl}！获得 1 技能点</span>`;
   for(const a of r.unlocked) html+=`<span class="rw gold">🏆 ${a.nm}</span>`;
   html+=`</div>`;
+  // 每日目标达成
+  if(r.goalHit){
+    html+=`<div class="goal-done">
+      <div class="gd-ic">🎯</div>
+      <div class="gd-txt">
+        <b>每日目标达成！</b> ${esc(r.goalHit.goal.desc)}
+        <div class="gd-sub">额外奖励 +${r.goalHit.coins} 星尘 +${r.goalHit.xp} XP</div>
+      </div>
+    </div>`;
+  }
   // 本局节奏评价
   const rs=G.rhythmBest||rhythmStats(G.rhythm);
   if(rs){
@@ -3026,6 +3415,39 @@ function renderHome(){
   $("#dailyDesc").innerHTML=`今日题目：<b style="color:var(--txt)">${dm.ico} ${dm.name}</b> · ${dd.name} · ${dc.cfg.lang==="cn"?"中文":"英文"} ${dc.done?`｜今日已得 <b style="color:var(--gold)">${fmt(dc.best)}</b> 分`:""}`;
   $("#btnDaily").textContent=dc.done?"🎯 每日挑战（已完成）":"🎯 每日挑战";
   $("#btnDaily2").textContent=dc.done?"再挑战":"进入";
+  // 每日签到卡片
+  {
+    const ci=STORE.checkin||{};
+    const signed=checkinDone();
+    const streak=ci.streak||0;
+    const nextDay=(streak%7)+1;
+    const tEl=$("#ckTitle"), dEl=$("#ckDesc"), bEl=$("#btnCheckin");
+    if(tEl){
+      tEl.innerHTML=`每日签到 · 连续 <b style="color:var(--gold)">${streak}</b> 天`;
+      if(signed){
+        dEl.textContent=`✅ 今日已签到，明天继续（累计 ${ci.total||0} 天）`;
+        if(bEl){ bEl.textContent="已签到"; bEl.disabled=true; }
+      }else if(checkinBroken()){
+        dEl.textContent=`⚠️ 昨天没签到，今天重新开始（第 ${nextDay} 天）`;
+        if(bEl){ bEl.textContent="签到"; bEl.disabled=false; }
+      }else{
+        dEl.textContent=`今天可领第 ${nextDay} 天奖励：✦${CHECKIN_REWARDS[nextDay-1].coins} + ${CHECKIN_REWARDS[nextDay-1].xp} XP`;
+        if(bEl){ bEl.textContent="签到"; bEl.disabled=false; }
+      }
+    }
+  }
+  // 每日目标卡片
+  {
+    const g=dailyGoal();
+    const pct=g.cfg?Math.min(100,Math.round(g.progress/g.cfg.n*100)):0;
+    const tEl=$("#goalTitle"), dEl=$("#goalDesc"), bar=$("#goalBar"), pEl=$("#goalPct");
+    if(tEl){
+      tEl.textContent=g.done?"每日目标 · 已完成 🎉":"每日目标";
+      dEl.textContent=g.done?`${g.cfg.desc} —— 奖励已发放`:`${g.cfg.desc}`;
+      if(bar) bar.style.width=pct+"%";
+      if(pEl) pEl.textContent=g.done?"完成":(g.progress+"/"+g.cfg.n+" · "+pct+"%");
+    }
+  }
   // 错词本徽章
   const wn=Object.keys(s.wrongWords||{}).length;
   const badge=$("#wwBadge");
@@ -3683,6 +4105,12 @@ function openSettings(){
       </div></div>
     <div class="set-row"><div><div class="t">减少动画</div><div class="d">关闭粒子、震动等动效（也会遵循系统「减弱动态效果」设置）</div></div>
       <button type="button" class="switch ${s.reduceMotion?"on":""}" data-k="reduceMotion"><i></i></button></div>
+    <div class="set-row"><div><div class="t">护眼模式</div><div class="d">叠加暖色滤镜，降低蓝光 —— 长时间练习眼睛不易疲劳</div></div>
+      <button type="button" class="switch ${s.eyeCare?"on":""}" data-k="eyeCare"><i></i></button></div>
+    <div class="set-row"><div><div class="t">专注模式</div><div class="d">隐藏所有界面元素，只留词流 —— 适合长时间沉浸练习</div></div>
+      <button type="button" class="switch ${s.focusMode?"on":""}" data-k="focusMode"><i></i></button></div>
+    <div class="set-row"><div><div class="t">键位高亮</div><div class="d">在词流中标出下一个要敲的键，减少低头找键</div></div>
+      <button type="button" class="switch ${s.keyHint?"on":""}" data-k="keyHint"><i></i></button></div>
     <div class="set-row" style="display:block">
       <div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:10px">
         <div><div class="t">皮肤</div><div class="d">用星尘解锁不同配色</div></div>
@@ -3706,6 +4134,8 @@ function openSettings(){
       btn.classList.toggle("on",s[k]);
       saveStore();
       if(k==="cvd"||k==="reduceMotion"){ applyTheme(); renderFlow(); }
+      if(k==="eyeCare"||k==="focusMode"){ applySettingsToDOM(); renderFlow(); }
+      if(k==="keyHint"){ renderFlow(); }
       if(k==="reduceMotion"&&s[k]) toast("已减少动画效果");
     };
   });
@@ -4579,6 +5009,10 @@ function bind(){
   $("#btnStart").onclick=()=>startGame();
   $("#btnDaily").onclick=()=>startGame(STORE.daily.cfg);
   $("#btnDaily2").onclick=()=>startGame(STORE.daily.cfg);
+  const ckBtn=$("#btnCheckin");
+  if(ckBtn) ckBtn.onclick=()=>openCheckin();
+  const fbExit=$("#focusExit");
+  if(fbExit) fbExit.onclick=()=>toggleFocusMode(false);
   $("#btnCustom").onclick=()=>openCustomImport();
   $("#btnLibrary").onclick=()=>openLibraryManager();
   $("#btnFav").onclick=()=>openFavorites();
@@ -4603,6 +5037,26 @@ function bind(){
 }
 function applySettingsToDOM(){
   document.documentElement.setAttribute("data-theme",STORE.settings.theme||"dark");
+  // 护眼 / 专注模式通过 body class 生效
+  const body=document.body;
+  if(body){
+    body.classList.toggle("eye-care", !!STORE.settings.eyeCare);
+    body.classList.toggle("focus-mode", !!STORE.settings.focusMode);
+  }
+}
+/* 切换专注模式（游戏中也可随时进出） */
+function toggleFocusMode(force){
+  const on = (force===undefined) ? !STORE.settings.focusMode : !!force;
+  STORE.settings.focusMode=on;
+  applySettingsToDOM();
+  saveStore();
+  const fi=$("#focusInfo");
+  if(fi && G.on){
+    fi.textContent=`专注模式 · ${G.mode==="sprint"?"极速风暴":(MODES.find(m=>m.id===G.mode)||{}).name||"挑战"}`;
+  }
+  if(on) toast("🎯 专注模式 —— 只剩词流，Esc 退出");
+  else toast("已退出专注模式");
+  try{ renderFlow(); }catch(e){}
 }
 window.startGame = startGame;
 window.showView = showView;

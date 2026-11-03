@@ -2273,6 +2273,11 @@ function startGame(dailyCfg){
   G.units=[]; G.idx=0; G.ci=0; G.gi=0; G.input="";
   G.combo=0; G.maxCombo=0; G.correct=0; G.wrong=0; G.score=0; G.words=0;
   G.perfect=true; G.wordScore=0; G.keyDelay={};
+  // 重置局内统计与计时基准，避免上一局的残留状态带入新对局
+  //   —— cnChars/enChars 不重置会让 byLang 语言统计跨局累加、越攒越虚；
+  //      lastKeyTs 不重置会让新对局第一击产生一次离谱的延迟样本；
+  //      paused 不重置会让异常结束的对局把暂停态带进下一局。
+  G.cnChars=0; G.enChars=0; G.lastKeyTs=0; G.paused=false;
   G.rhythm=[]; G.rhythmBest=null;
   G.timeline=[]; G.ghost=null; G.imeTipShown=false;
   G.immuneUntil=0;   // 重置专注免疫窗口，避免上一局的残余状态带入新对局
@@ -3292,6 +3297,8 @@ function renderResult(r){
   html+=`<div class="res-title">${G.mode==="survival"?"生存结束":G.mode==="climb"?"登顶完成！":G.mode==="custom"?"词库练完！":G.mode==="review"?"复习完成！":G.mode==="precision"?(r.acc>=100?"完美通关！":"挑战结束"):"风暴结束"}</div>`;
   html+=`<div class="res-sub">${modeName} · ${DIFFS.find(d=>d.id===G.diff).name} · ${G.lang==="en"?"英文":G.lang==="mix"?"中英混合":"中文拼音"}${G.customName?" · <b style='color:var(--acc)'>"+esc(G.customName)+"</b>":""}</div>`;
   if(r.newRec.length) html+=`<div class="newrec">🏅 新纪录：${r.newRec.join(" / ")}</div>`;
+  // 零失误完美对局徽章：所有模式通用，给玩家更明确的正向反馈
+  if(G.wrong===0 && G.correct>0) html+=`<div class="newrec" style="background:linear-gradient(90deg,#1f9d55,#2bb3c0);color:#04210f">🌟 零失误完美对局！</div>`;
   html+=`<div class="res-grid">`;
   html+=`<div class="res-cell hero"><div class="v">${r.wpm}</div><div class="k">${isCN?"字/分":"WPM"}</div></div>`;
   html+=`<div class="res-cell"><div class="v">${r.acc}%</div><div class="k">准确率</div></div>`;

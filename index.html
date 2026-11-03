@@ -2242,6 +2242,8 @@ function customFinished(){
 function startGame(dailyCfg){
   // 兼容调用：直接传入模式字符串（如 startGame('precision')）等价于先设置 CONFIG.mode
   if(typeof dailyCfg==="string"){ CONFIG.mode=dailyCfg; dailyCfg=null; }
+  // 防御：清理可能残留的旧计时器，避免同一对局出现两个 tick 导致计时/统计翻倍
+  if(G.timer){ clearInterval(G.timer); G.timer=null; }
   Audio2.init();
   // 用户已开始游戏 → 不再自动弹引导（避免打断正在进行的对局）
   if(!guideSeen()){
@@ -2273,6 +2275,7 @@ function startGame(dailyCfg){
   G.perfect=true; G.wordScore=0; G.keyDelay={};
   G.rhythm=[]; G.rhythmBest=null;
   G.timeline=[]; G.ghost=null; G.imeTipShown=false;
+  G.immuneUntil=0;   // 重置专注免疫窗口，避免上一局的残余状态带入新对局
   imeReset();
   const it=$("#imeTip"); if(it) it.style.display="none";
   // 幽灵对手：限时类模式都可回放最佳表现作对手
@@ -2460,10 +2463,6 @@ function handleKey(ch){
   }
   G.lastKeyTs=now;
 
-  // 专注技能：失误后 1 秒免疫
-  const focusOn=(S().skills&&S().skills.focus)||0;
-  if(focusOn>0 && now<G.immuneUntil) return;
-
   const u=G.units[G.idx];
   if(!u) return;
   // 空格：中文拼音与内置英文词库均不含空格，遇到时按"跳过"处理
@@ -2503,6 +2502,13 @@ function onMistake(ch){
   const s=S(), sk=s.skills||{};
   // 护盾：免除失误
   if(G.shields>0){ G.shields--; toast("🛡️ 护盾挡下一次失误"); Audio2.err(); return; }
+  // 专注技能：失误后 1 秒内的后续失误免罚
+  //   —— 仅原谅"失误"（不计错、不断连击、不抖动），正确的输入照常计入；
+  //      且不刷新免疫窗口，避免连续失误时无限免罚。
+  if(Date.now() < G.immuneUntil){
+    G.perfect=false;
+    return;
+  }
   G.wrong++; G.perfect=false;
   // 错词本：任何模式的失误都记录（精准模式整词重来，也应计入）
   const curUnit=G.units[G.idx];
@@ -3422,7 +3428,8 @@ function renderHome(){
     const ci=STORE.checkin||{};
     const signed=checkinDone();
     const streak=ci.streak||0;
-    const nextDay=(streak%7)+1;
+    // 断签后将从第 1 天重新开始，显示与最终发放奖励保持一致，避免"显示第 N 天、实发第 1 天"
+    const nextDay=checkinBroken()?1:(streak%7)+1;
     const tEl=$("#ckTitle"), dEl=$("#ckDesc"), bEl=$("#btnCheckin");
     if(tEl){
       tEl.innerHTML=`每日签到 · 连续 <b style="color:var(--gold)">${streak}</b> 天`;

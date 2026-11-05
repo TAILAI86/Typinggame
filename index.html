@@ -1097,7 +1097,14 @@ function todayKey(d){d=d||new Date();return d.getFullYear()+"-"+pad2(d.getMonth(
 /* ------------------------------------------------------------ 每日签到 */
 /* 7 天循环签到表：连续签到越久，单次奖励越高；第 7 天给大奖后进入新一轮。
    断签规则：昨天没签 → 连续天数归零（不惩罚，只是不累计）。
-   不提供补签 —— 免得变成每日打卡任务；但漏签后的提示要说清楚。 */
+   不提供补签 —— 免得变成每日打卡任务；但漏签后的提示要说清楚。
+
+   状态字段：
+     streak —— 本轮 7 天循环内的档位（1..7，第 8 天起回到第 1 档）
+     chain  —— 真实连续签到天数（只在断签时归零，用于展示与"七日之约"成就）
+   注意：早期版本把 streak 当作连续天数并在第 8 天归零，导致
+   "连续签到 8 天"被显示成"连续 1 天"，七日之约成就也只能在第一轮解锁。
+   现在两者分离：奖励档位与连续天数互不干扰。 */
 const CHECKIN_REWARDS = [
   { coins:50,   xp:30,  label:"第 1 天" },
   { coins:80,   xp:50,  label:"第 2 天" },
@@ -1126,20 +1133,43 @@ function checkinBroken(){
   if(checkinDone()) return false;       // 今天已签
   return ci.last!==dateKeyOffset(-1);    // 昨天没签 → 断
 }
+/* 签到状态单一数据源：面板、首页卡片、实际发奖都从这里取，
+   避免各处自行推导导致"显示第 N 天、实发第 M 天"。
+   返回：
+     streak    —— 真实连续签到天数（断签归零；满 7 天也不清零）
+     nextTier  —— 今天签到能拿到的档位（1..7）
+     gotCount  —— 本轮已领取的档位数（= nextTier-1）
+     done      —— 今天是否已签
+     broken    —— 今天是否断签
+   规则：连续第 1~7 天对应第 1~7 档，第 8 天起进入新一轮回到第 1 档。
+   面板上的"已领取"格子恒为 1..nextTier-1，"今天可领"恒为 nextTier —— 
+   两者严格互补，因此不会出现"第 8 天既显示已领又高亮"的矛盾。 */
+function checkinState(){
+  const ci=STORE.checkin||{};
+  const done=checkinDone();
+  const broken=checkinBroken();
+  const chain=Number(ci.chain)||0;              // 连续签到天数（真实值）
+  const prevTier=Number(ci.streak)||0;          // 上一次领取的档位（1..7）
+  // 今天签到拿到的档位：断签从第 1 档重新开始，否则顺延一档（第 7 档后回到第 1 档）
+  let nextTier;
+  if(broken) nextTier=1;
+  else nextTier=(prevTier%7)+1;
+  return { streak:chain, nextTier, gotCount:nextTier-1, tier:nextTier, done, broken };
+}
 /* 执行签到，返回奖励信息（已签则返回 null） */
 function doCheckin(){
   if(checkinDone()) return null;
-  const ci=STORE.checkin||(STORE.checkin={last:"",streak:0,total:0,days:{}});
-  // 连续性判定：昨天签过则 +1，否则从 1 开始
-  ci.streak=(ci.last===dateKeyOffset(-1)) ? (ci.streak||0)+1 : 1;
+  const ci=STORE.checkin||(STORE.checkin={last:"",streak:0,chain:0,total:0,days:{}});
+  const st=checkinState();
+  // 连续性判定：昨天签过则 +1，否则从 1 开始（断签 → 连续天数归零）
+  ci.chain=(ci.last===dateKeyOffset(-1)) ? (st.streak+1) : 1;
   ci.last=todayKey();
   ci.total=(ci.total||0)+1;
   ci.days=ci.days||{};
-  ci.days[ci.last]=ci.streak;
-  // 连续满 7 天后进入新一轮（连续天数归零重新累计）
-  let cycleDay=((ci.streak-1)%7)+1;
-  const bonus=(ci.streak>7 && ci.streak%7===1);
-  if(bonus){ ci.streak=1; ci.days[ci.last]=1; }
+  ci.days[ci.last]=ci.chain;
+  // 本轮档位：断签从第 1 档开始，否则顺延（第 7 档拿大奖后进入新一轮回到第 1 档）
+  const cycleDay=st.broken ? 1 : st.nextTier;
+  ci.streak=cycleDay;
   const rw=CHECKIN_REWARDS[cycleDay-1];
   const s=S();
   s.coins=(s.coins||0)+rw.coins;
@@ -1148,11 +1178,12 @@ function doCheckin(){
   // 成就体系按槽判定（每个存档槽有独立成就），这样才读得到。
   if(!s.flags) s.flags={};
   s.flags.ckTotal=ci.total;
-  s.flags.ckStreak=ci.streak;
+  s.flags.ckStreak=ci.chain;
   let leveled=false;
   while(s.xp>=lvlNeed(s.lvl)){ s.xp-=lvlNeed(s.lvl); s.lvl++; s.sp++; leveled=true; }
   saveStore();
-  return { coins:rw.coins, xp:rw.xp, streak:ci.streak, cycleDay, label:rw.label, bonus, leveled };
+  return { coins:rw.coins, xp:rw.xp, streak:ci.chain, cycleDay, tier:cycleDay,
+           label:rw.label, bonus:cycleDay===1&&ci.chain>1, leveled };
 }
 /* 本月签到日历数据（按周对齐，前后补空白格） */
 function checkinCalendar(year, month){
@@ -1711,7 +1742,8 @@ function defaultStore(){
                       focusMode:false, eyeCare:false, keyHint:false },
            daily:{ date:"", best:0, done:false, cfg:null },
            // 签到：连续天数、最近签到日期、累计签到、历史记录
-           checkin:{ last:"", streak:0, total:0, days:{} },
+           //   streak = 本轮 7 天循环内的档位（1..7）；chain = 真实连续签到天数
+           checkin:{ last:"", streak:0, chain:0, total:0, days:{} },
            // 每日目标：当日进度与目标定义
            goal:{ date:"", cfg:null, progress:0, done:false } };
 }
@@ -1728,7 +1760,9 @@ function snapshotBase(store){
       time:st.time||0, accSum:st.accSum||0, accN:st.accN||0,
       byMode:Object.assign({}, st.byMode||{}),
       byLang:Object.assign({}, st.byLang||{}),
-      keys:Object.assign({}, st.keys||{}),
+      // 按键统计必须深拷贝：浅拷贝会让基线与实时数据共享同一个 {n,s} 对象，
+      // 局内累加时把基线一起改掉，导致多标签页合并算不出真实增量。
+      keys:Object.fromEntries(Object.entries(st.keys||{}).map(([k,v])=>[k,{n:(v&&v.n)||0,s:(v&&v.s)||0}])),
       wrongWords:Object.assign({}, (s&&s.wrongWords)||{})
     });
   }
@@ -1809,6 +1843,14 @@ function loadStoreFrom(d){
     });
     d.settings=Object.assign(def.settings,d.settings||{});
     d.daily=Object.assign(def.daily,d.daily||{});
+    d.checkin=Object.assign(def.checkin,d.checkin||{});
+    // 旧存档迁移：早期版本把"连续天数"和"本轮档位"混在 streak 一个字段里，
+    //   且第 8 天起会把 streak 归零。迁移时把 streak 视为本轮档位，
+    //   chain（真实连续天数）缺失时回退为档位值，保证档位与实发奖励始终一致。
+    d.checkin.streak=Number(d.checkin.streak)||0;
+    d.checkin.chain=Number(d.checkin.chain)||0;
+    d.checkin.total=Number(d.checkin.total)||0;
+    if(!d.checkin.chain && d.checkin.streak) d.checkin.chain=d.checkin.streak;
     d.active=d.active||0; d.v=1;
     d.rev=Number(d.rev)||0;
     d.savedAt=Number(d.savedAt)||0;
@@ -1877,12 +1919,12 @@ function mergeStores(disk, mem){
     for(const k in (ds2.byMode||{})) ms2.byMode[k]=addDelta(ds2.byMode[k], ms2.byMode[k], (bs2.byMode||{})[k]);
     ms2.byLang=Object.assign({}, ms2.byLang||{});
     for(const k in (ds2.byLang||{})) ms2.byLang[k]=addDelta(ds2.byLang[k], ms2.byLang[k], (bs2.byLang||{})[k]);
-    // 按键统计：次数增量合并、总耗时取 max（平均才有意义）
+    // 按键统计：次数与间隔总和都用增量合并（保持 s/n 平均间隔在各标签页间一致）
     ms2.keys=Object.assign({}, ms2.keys||{});
     for(const k in (ds2.keys||{})){
       const a=ds2.keys[k]||{}, b=ms2.keys[k]||{n:0,s:0};
-      const baseN=((bs2.keys||{})[k]||{}).n||0;
-      ms2.keys[k]={ n:addDelta(a.n, b.n, baseN), s:Math.max(Number(a.s)||0,Number(b.s)||0) };
+      const base=((bs2.keys||{})[k]||{});
+      ms2.keys[k]={ n:addDelta(a.n, b.n, base.n||0), s:addDelta(a.s, b.s, base.s||0) };
     }
     // 成就 / 标记 / 技能：取并集，技能等级取 max
     for(const k of ["ach","flags","skills","favorites"]){
@@ -2015,7 +2057,21 @@ function storeSize(store){
 }
 
 let _lastSaveWarned=0;
+/* 批量保存：一局结算会连续调用 saveStore 多次（成就、每日目标…），
+   每次都是一次全量 JSON 序列化 + localStorage 写入，在低端机上会明显卡顿，
+   也会加速配额消耗。用 begin/endSaveBatch 把连续的写入合并成一次。
+   注意：必须用 try/finally 包裹调用点，否则异常时 _saveBatch 会永久卡住，
+   导致之后的存档全部无法写入。 */
+let _saveBatch=0, _saveDirty=false;
+function beginSaveBatch(){ _saveBatch++; }
+function endSaveBatch(){
+  if(_saveBatch<=0) return;
+  _saveBatch--;
+  if(_saveBatch===0 && _saveDirty){ _saveDirty=false; saveStore(); }
+}
 function saveStore(){
+  // 批量模式：只标记"待写入"，由 endSaveBatch 统一落盘一次
+  if(_saveBatch>0){ _saveDirty=true; return true; }
   try{
     // ① 多标签页冲突检测：盘上版本更新则先合并
     const disk=readDiskStore();
@@ -2127,10 +2183,30 @@ const G = {
   customName:"", customTotal:0, customDone:0,   // 自定义词库进度
   paused:false, pauseAt:0, pauseShift:0,         // 暂停状态
   ghost:null, timeline:[],                       // 幽灵对手与本局时间线
-  wordScore:0, perfect:true, lastKeyTs:0, keyDelay:{},
+  wordScore:0, perfect:true, lastKeyTs:0, keyStat:{},
   rhythm:[], rhythmBest:null                          // 击键间隔序列 + 本局节奏统计
 };
 const CONFIG = { mode:"sprint", diff:"normal", lang:"cn" };
+/* 玩家的模式/难度/语言选择写入存档 —— 刷新页面后不再被重置回默认值。
+   注意：这些属于"用户偏好"，存全局 settings（跨存档槽共享），不是各槽的进度。 */
+function setConfig(patch){
+  if(!patch) return CONFIG;
+  if(patch.mode && patch.mode!==CONFIG.mode) CONFIG.mode=patch.mode;
+  if(patch.diff && patch.diff!==CONFIG.diff) CONFIG.diff=patch.diff;
+  if(patch.lang && patch.lang!==CONFIG.lang) CONFIG.lang=patch.lang;
+  if(!STORE.settings) STORE.settings={};
+  STORE.settings.config={ mode:CONFIG.mode, diff:CONFIG.diff, lang:CONFIG.lang };
+  saveStore();
+  return CONFIG;
+}
+/* 启动时把存档里的选择恢复到 CONFIG */
+function restoreConfig(){
+  const c=(STORE.settings&&STORE.settings.config)||null;
+  if(!c) return;
+  if(c.mode && MODES.some(m=>m.id===c.mode)) CONFIG.mode=c.mode;
+  if(c.diff && DIFFS.some(d=>d.id===c.diff)) CONFIG.diff=c.diff;
+  if(c.lang && ["cn","en","mix"].includes(c.lang)) CONFIG.lang=c.lang;
+}
 
 /* --------------------------------------------------------- 词流生成器 */
 function poolKey(){
@@ -2272,7 +2348,7 @@ function startGame(dailyCfg){
   G.rng = dailyCfg ? mulberry32(dailyCfg.seed) : mulberry32((Date.now()^hashStr(String(Math.random())))|0);
   G.units=[]; G.idx=0; G.ci=0; G.gi=0; G.input="";
   G.combo=0; G.maxCombo=0; G.correct=0; G.wrong=0; G.score=0; G.words=0;
-  G.perfect=true; G.wordScore=0; G.keyDelay={};
+  G.perfect=true; G.wordScore=0; G.keyStat={};
   // 重置局内统计与计时基准，避免上一局的残留状态带入新对局
   //   —— cnChars/enChars 不重置会让 byLang 语言统计跨局累加、越攒越虚；
   //      lastKeyTs 不重置会让新对局第一击产生一次离谱的延迟样本；
@@ -2281,10 +2357,14 @@ function startGame(dailyCfg){
   G.rhythm=[]; G.rhythmBest=null;
   G.timeline=[]; G.ghost=null; G.imeTipShown=false;
   G.immuneUntil=0;   // 重置专注免疫窗口，避免上一局的残余状态带入新对局
+  // 练习类模式（自定义/错词复习/收藏夹）的进度必须每局归零 ——
+  //   否则第二局开始时 customDone 仍停留在上一局的末值，
+  //   打第一个词就会被判定成"已练完"而立刻结算（实测第二局只打 1 个词就结束）。
+  G.customDone=0; G.customTotal=0;
   imeReset();
   const it=$("#imeTip"); if(it) it.style.display="none";
-  // 幽灵对手：限时类模式都可回放最佳表现作对手
-  if(G.mode==="sprint"||G.mode==="combo"||G.mode==="precision"||G.mode==="survival"){
+  // 幽灵对手：竞速类模式可回放最佳表现作对手（与 saveGhost 的记录范围保持一致）
+  if(GHOST_MODES.indexOf(G.mode)>=0){
     G.ghost=buildGhost();
   }
   // 自定义词库：优先使用玩家导入的内容；未导入则回退到内置词库
@@ -2461,10 +2541,15 @@ function handleKey(ch){
   if(G.paused) return;               // 暂停中不响应任何游戏输入
   const now=Date.now();
   // 按键统计：只记录字母/数字/常用符号，避免异常按键让字典无限膨胀
+  //   n = 该键的真实按键次数，s = 这些按键之前的间隔总和（ms）
+  //   注意：早期版本这里按"每局 +1"累计，导致热度图、手指分工分析与
+  //   "累计按键次数"成就全部失真（5000 次按键实际要打上千局才达成）。
   if(G.lastKeyTs && ch && ch.length===1 && /[a-zA-Z0-9`~!@#$%^&*()_+=\-[\]\\|;:'",.<>\/?]/.test(ch)){
-    G.keyDelay[ch]=(G.keyDelay[ch]||0)*0.88+((now-G.lastKeyTs))*0.12;
+    const gap=now-G.lastKeyTs;
+    const ks=G.keyStat[ch]||(G.keyStat[ch]={n:0,s:0});
+    ks.n++; ks.s+=gap;
     // 节奏分析：记录击键间隔序列（最多 400 个点）
-    if(G.rhythm && G.rhythm.length<400) G.rhythm.push(now-G.lastKeyTs);
+    if(G.rhythm && G.rhythm.length<400) G.rhythm.push(gap);
   }
   G.lastKeyTs=now;
 
@@ -2788,8 +2873,7 @@ function updateHints(){
   }
 }
 function updateHud(){
-  const mins=Math.max(G.elapsed/60,1/600);
-  const wpm=Math.round((G.correct/5)/mins);
+  const wpm=wpmOf(G.correct,G.elapsed);
   $("#mSpeed").textContent=wpm;
   $("#kSpeed").textContent=G.lang==="en"?"WPM":"字/分";
   const acc=G.correct+G.wrong>0?Math.round(G.correct/(G.correct+G.wrong)*100):100;
@@ -2848,6 +2932,25 @@ function updateHud(){
   }
 }
 
+/* ------------------------------------------------------------ 速度计算 */
+/* 换算本局速度（词/分钟）。
+   注意下限：不足 5 秒的短局速度没有参考价值 —— 早期版本下限是 1/600 分钟，
+   于是"0.2 秒打完 24 个字"会算出 2880 字/分这种荒谬数字，
+   进而污染"历史最佳速度"、段位与速度类成就。 */
+const MIN_SPEED_SEC=5;
+function wpmOf(correct, elapsedSec){
+  const mins=Math.max((elapsedSec||0)/60, MIN_SPEED_SEC/60);
+  return Math.round((correct||0)/5/mins);
+}
+/* 练习类模式：自定义词库 / 错词复习 / 收藏夹练习。
+   这三种模式不计时、词表长度也由玩家自定（可以只有 2 个词），
+   其速度与得分不可与限时挑战横向比较 —— 因此不参与"历史最佳"的全局纪录，
+   只计入各模式独立最佳与累计统计。
+   幽灵对手同理：只有真正存在幽灵的竞速模式才会记录。 */
+const PRACTICE_MODES=["custom","review","fav"];
+const GHOST_MODES=["sprint","combo","precision","survival"];
+const isPracticeMode=m=>PRACTICE_MODES.indexOf(m)>=0;
+
 /* ------------------------------------------------------------ 幽灵竞速 */
 /* 记录每局的"打字时间线"（每个词完成时的毫秒数），下次作为幽灵对手
    幽灵推进到第几个词，就由 timeLine[idx] 决定它在第几秒到达
@@ -2860,9 +2963,12 @@ function buildGhost(){
 }
 function saveGhost(){
   const s=S();
+  // 幽灵只用于竞速模式的对手回放 —— 练习类模式不计时，记录幽灵毫无意义，
+  // 反而会把"历史最佳速度"污染成不可信的高数值。
+  if(!GHOST_MODES.indexOf(G.mode)>=0) return;
   if(!s.stats.ghost) s.stats.ghost={ wpm:0, timeline:[], at:0, byMode:{} };
   if(!s.stats.ghost.byMode) s.stats.ghost.byMode={};
-  const wpm=Math.round((G.correct/5)/Math.max(G.elapsed/60,1/600));
+  const wpm=wpmOf(G.correct,G.elapsed);
   const cur=s.stats.ghost.byMode[G.mode]||{ wpm:0, timeline:[] };
   if(wpm>(cur.wpm||0)){
     cur.wpm=wpm;
@@ -2901,13 +3007,23 @@ function isFavorite(u){
   const f=S().favorites||{};
   return !!f[(u.lang||"cn")+"|"+u.text];
 }
+/* 收藏夹 → 可练习单元数组
+   注意：收藏时保存的 input 可能是空串（老版本收藏记录只有 text），
+   此时要用音节重新拼出输入串，否则该词在练习中永远无法正确判定。 */
 function favoriteUnits(){
   const f=S().favorites||{};
-  return Object.values(f).map(it=>({
-    lang:it.lang||"cn", text:it.text,
-    syl:(it.syl&&it.syl.length)?it.syl:[it.input||it.text],
-    input:it.input||it.input
-  }));
+  return Object.values(f).map(it=>{
+    const lang=it.lang||"cn";
+    const syl=(it.syl&&it.syl.length)?it.syl.slice():[];
+    // 输入串：优先用收藏时保存的 input；缺失时由音节拼接（中文全拼）或退回文本
+    let input=it.input||"";
+    if(!input){
+      if(syl.length) input=syl.join("");
+      else input=it.text||"";
+    }
+    if(!syl.length) syl=[input];
+    return { lang, text:it.text||"", syl, input };
+  });
 }
 /* 打开收藏夹面板 */
 /* ------------------------------------------------------------ 签到面板 */
@@ -2919,10 +3035,10 @@ function openCheckin(){
   const render=()=>{
     // 每次重绘都重新读取状态 —— 否则签到后按钮仍显示"可签到"
     const ci=STORE.checkin||{};
-    const done=checkinDone();
-    const broken=checkinBroken();
-    const streak=ci.streak||0;
-    const cycleDay=(streak%7)+1;      // 今天若签到，将拿到的第几天
+    const st=checkinState();
+    const done=st.done;
+    const broken=st.broken;
+    const streak=st.streak;
     const cells=checkinCalendar(viewY,viewM);
     const monthName=viewY+" 年 "+(viewM+1)+" 月";
     const signed=cells.filter(c=>c&&c.signed).length;
@@ -2940,8 +3056,9 @@ function openCheckin(){
       <div class="ck-week">
         ${CHECKIN_REWARDS.map((r,i)=>{
           const day=i+1;
-          const got=done && day<=cycleDay;
-          const cur=!done && day===cycleDay;
+          // 本轮已领取的档位标"已领"；今天可领的那一档高亮
+          const got=day<=st.gotCount;
+          const cur=!done && day===st.nextTier;
           return `<div class="ck-day ${got?"got":""} ${cur?"cur":""}">
             <div class="ck-d">${day}</div>
             <div class="ck-v">✦${r.coins}</div>
@@ -3019,7 +3136,7 @@ function openFavorites(){
     s.favorites={}; saveStore(); dismissModal(body); toast("收藏夹已清空");
   };
   body.querySelector("#favPractice").onclick=()=>{
-    dismissModal(body); CONFIG.mode="fav"; startGame();
+    dismissModal(body); setConfig({mode:"fav"}); startGame();
   };
   body.onclick=e=>{ if(e.target===body) dismissModal(body); };
 }
@@ -3209,8 +3326,7 @@ function endGame(){
   clearInterval(G.timer);
   const vk=$("#vkb"); if(vk) vk.classList.remove("on");
   Audio2.finish();
-  const mins=Math.max(G.elapsed/60,1/600);
-  const wpm=Math.round((G.correct/5)/mins);
+  const wpm=wpmOf(G.correct,G.elapsed);
   const acc=G.correct+G.wrong>0?Math.round(G.correct/(G.correct+G.wrong)*100):100;
   const s=S();
   if(!s.flags) s.flags={};
@@ -3218,10 +3334,15 @@ function endGame(){
   const finalScore=Math.round(G.score*(0.6+acc/100*0.6)*(G.mode==="precision"?(G.perfect?1.5:1):1));
   const xp=Math.round(finalScore/10+G.correct/4);
   const coins=Math.round(finalScore/60+G.maxCombo*0.6);
+  // 练习类模式（自定义/错词/收藏夹）不计时，速度与得分不可与限时挑战横向比较，
+  // 因此不写入全局"历史最佳"（否则 0.2 秒打完 2 个词就会刷出 2880 字/分的假纪录）。
+  const practice=isPracticeMode(G.mode);
   const newRec=[];
-  if(wpm>s.stats.bestWpm){ s.stats.bestWpm=wpm; newRec.push("速度"); }
+  if(!practice){
+    if(wpm>s.stats.bestWpm){ s.stats.bestWpm=wpm; newRec.push("速度"); }
+    if(finalScore>s.stats.bestScore){ s.stats.bestScore=finalScore; newRec.push("得分"); }
+  }
   if(G.maxCombo>s.stats.bestCombo){ s.stats.bestCombo=G.maxCombo; newRec.push("连击"); }
-  if(finalScore>s.stats.bestScore){ s.stats.bestScore=finalScore; newRec.push("得分"); }
   s.stats.games++; s.stats.chars+=G.correct; s.stats.words+=G.words; s.stats.time+=G.elapsed;
   s.stats.accSum+=acc; s.stats.accN++;
   s.stats.byMode[G.mode]=(s.stats.byMode[G.mode]||0)+1;
@@ -3238,7 +3359,14 @@ function endGame(){
   // 语种统计：按实际打出的字符归属，避免 mix 与 cn/en 重复累加
   s.stats.byLang.cn=(s.stats.byLang.cn||0)+G.cnChars;
   s.stats.byLang.en=(s.stats.byLang.en||0)+G.enChars;
-  for(const k in G.keyDelay){ s.stats.keys[k]=s.stats.keys[k]||{n:0,s:0}; s.stats.keys[k].n++; s.stats.keys[k].s+=G.keyDelay[k]; }
+  // 按键统计汇总：n 累加真实按键次数，s 累加该键的击键间隔总和
+  //   这样 s/n 才是该键的"平均间隔"，热度图与手指分工分析才有意义。
+  for(const k in G.keyStat){
+    const v=G.keyStat[k]; if(!v||!v.n) continue;
+    s.stats.keys[k]=s.stats.keys[k]||{n:0,s:0};
+    s.stats.keys[k].n+=v.n;
+    s.stats.keys[k].s+=v.s;
+  }
   // 节奏分析：保存本局击键间隔序列与统计（用于节奏稳定性评估）
   const rs=rhythmStats(G.rhythm);
   if(rs){
@@ -3261,21 +3389,29 @@ function endGame(){
   const before=s.lvl;
   s.xp+=xp; s.coins+=coins;
   while(s.xp>=lvlNeed(s.lvl)){ s.xp-=lvlNeed(s.lvl); s.lvl++; s.sp++; }
+  // 每日目标推进（局数 / 字符 / 准确率 / 连击 / 词数）
+  //   —— 结算阶段连续触发多次存档写入，用批量保存合并成一次落盘
+  //   放在成就判定之前：达成目标时"日拱一卒"成就应当立刻解锁，
+  //   否则要等到下一局才会补发。
+  let goalHit=null;
+  beginSaveBatch();
+  try{
+    goalHit=updateGoalProgress("game",1);
+    if(!goalHit) goalHit=updateGoalProgress("chars",G.correct);
+    if(!goalHit) goalHit=updateGoalProgress("words",G.words);
+    if(!goalHit) goalHit=updateGoalProgress("acc",acc);
+    if(!goalHit) goalHit=updateGoalProgress("combo",G.maxCombo);
+    if(goalHit){ s.flags.goalDone=true; }
+  }finally{
+    endSaveBatch();
+  }
   // 成就
   const unlocked=[];
   for(const a of ACHIEVEMENTS){
     if(!s.ach[a.id] && a.chk(s)){ s.ach[a.id]=Date.now(); unlocked.push(a); }
   }
   saveStore();
-  // 每日目标推进（局数 / 字符 / 准确率 / 连击 / 词数）
-  let goalHit=null;
-  goalHit=updateGoalProgress("game",1);
-  if(!goalHit) goalHit=updateGoalProgress("chars",G.correct);
-  if(!goalHit) goalHit=updateGoalProgress("words",G.words);
-  if(!goalHit) goalHit=updateGoalProgress("acc",acc);
-  if(!goalHit) goalHit=updateGoalProgress("combo",G.maxCombo);
-  if(goalHit){ s.flags.goalDone=true; }
-  renderResult({wpm,acc,finalScore,xp,coins,newRec,unlocked,levelUp:s.lvl>before,goalHit});
+  renderResult({wpm,acc,finalScore,xp,coins,newRec,unlocked,levelUp:s.lvl>before,goalHit,modeBest:mb});
   showView("Result");
 }
 function quitGame(){
@@ -3297,8 +3433,15 @@ function renderResult(r){
   html+=`<div class="res-title">${G.mode==="survival"?"生存结束":G.mode==="climb"?"登顶完成！":G.mode==="custom"?"词库练完！":G.mode==="review"?"复习完成！":G.mode==="precision"?(r.acc>=100?"完美通关！":"挑战结束"):"风暴结束"}</div>`;
   html+=`<div class="res-sub">${modeName} · ${DIFFS.find(d=>d.id===G.diff).name} · ${G.lang==="en"?"英文":G.lang==="mix"?"中英混合":"中文拼音"}${G.customName?" · <b style='color:var(--acc)'>"+esc(G.customName)+"</b>":""}</div>`;
   if(r.newRec.length) html+=`<div class="newrec">🏅 新纪录：${r.newRec.join(" / ")}</div>`;
+  // 练习类模式不参与全局"历史最佳"，但仍展示该模式的个人最佳 ——
+  //   否则练习完一局毫无反馈，玩家会以为自己的成绩没被记录。
+  if(isPracticeMode(G.mode) && r.modeBest){
+    html+=`<div class="res-sub" style="opacity:.85">📌 本模式最佳：速度 <b style="color:var(--acc)">${r.modeBest.wpm||0}</b> · 最高连击 <b style="color:var(--warn)">${r.modeBest.combo||0}</b> · 最佳得分 <b style="color:var(--gold)">${fmt(r.modeBest.score||0)}</b></div>`;
+  }
   // 零失误完美对局徽章：所有模式通用，给玩家更明确的正向反馈
-  if(G.wrong===0 && G.correct>0) html+=`<div class="newrec" style="background:linear-gradient(90deg,#1f9d55,#2bb3c0);color:#04210f">🌟 零失误完美对局！</div>`;
+  //   判定统一用 G.perfect（游戏内"完美"的唯一口径），而不是 G.wrong===0 ——
+  //   两者在护盾/专注技能下会不一致，用错口径会出现"明明失误过却发完美徽章"。
+  if(G.perfect && G.correct>0) html+=`<div class="newrec" style="background:linear-gradient(90deg,#1f9d55,#2bb3c0);color:#04210f">🌟 零失误完美对局！</div>`;
   html+=`<div class="res-grid">`;
   html+=`<div class="res-cell hero"><div class="v">${r.wpm}</div><div class="k">${isCN?"字/分":"WPM"}</div></div>`;
   html+=`<div class="res-cell"><div class="v">${r.acc}%</div><div class="k">准确率</div></div>`;
@@ -3367,7 +3510,7 @@ function renderHome(){
     const b=document.createElement("button");
     b.textContent=m.ico+" "+m.name;
     b.className=CONFIG.mode===m.id?"on":"";
-    b.onclick=()=>{ CONFIG.mode=m.id; renderHome(); };
+    b.onclick=()=>{ setConfig({mode:m.id}); renderHome(); };
     sm.appendChild(b);
   }
   // 难度 / 语种
@@ -3377,7 +3520,7 @@ function renderHome(){
     b.textContent=d.name;
     b.className=CONFIG.diff===d.id?"on":"";
     b.title="词库："+poolTierLabel(d.id)+" · 初始生命 "+d.life;
-    b.onclick=()=>{ CONFIG.diff=d.id; renderHome(); };
+    b.onclick=()=>{ setConfig({diff:d.id}); renderHome(); };
     sd.appendChild(b);
   }
   const tier=$("#diffTier");
@@ -3398,7 +3541,7 @@ function renderHome(){
     const b=document.createElement("button");
     b.textContent=nm; b.className=CONFIG.lang===id?"on":"";
     if(id==="mix"&&!(s.skills&&s.skills.polyglot)){ b.textContent="🔒混合"; b.style.opacity=".45"; b.onclick=()=>toast("🔒 需先在技能树解锁「兼修」"); }
-    else b.onclick=()=>{ CONFIG.lang=id; renderHome(); };
+    else b.onclick=()=>{ setConfig({lang:id}); renderHome(); };
     sl.appendChild(b);
   }
   // 模式卡片
@@ -3411,7 +3554,7 @@ function renderHome(){
     el.innerHTML=`<span class="best">${esc(best)}</span><span class="ico">${m.ico}</span>
       <div class="nm">${m.name}</div><div class="ds">${m.ds}</div>
       ${locked?`<div class="ds" style="margin-top:6px;color:var(--warn)">Lv.${m.need} 解锁</div>`:""}`;
-    if(!locked) el.onclick=()=>{ CONFIG.mode=m.id; renderHome(); };
+    if(!locked) el.onclick=()=>{ setConfig({mode:m.id}); renderHome(); };
     mc.appendChild(el);
   }
   // 每日挑战
@@ -3433,17 +3576,18 @@ function renderHome(){
   // 每日签到卡片
   {
     const ci=STORE.checkin||{};
-    const signed=checkinDone();
-    const streak=ci.streak||0;
+    const st=checkinState();
+    const signed=st.done;
+    const streak=st.streak;
     // 断签后将从第 1 天重新开始，显示与最终发放奖励保持一致，避免"显示第 N 天、实发第 1 天"
-    const nextDay=checkinBroken()?1:(streak%7)+1;
+    const nextDay=st.nextTier;
     const tEl=$("#ckTitle"), dEl=$("#ckDesc"), bEl=$("#btnCheckin");
     if(tEl){
       tEl.innerHTML=`每日签到 · 连续 <b style="color:var(--gold)">${streak}</b> 天`;
       if(signed){
         dEl.textContent=`✅ 今日已签到，明天继续（累计 ${ci.total||0} 天）`;
         if(bEl){ bEl.textContent="已签到"; bEl.disabled=true; }
-      }else if(checkinBroken()){
+      }else if(st.broken){
         dEl.textContent=`⚠️ 昨天没签到，今天重新开始（第 ${nextDay} 天）`;
         if(bEl){ bEl.textContent="签到"; bEl.disabled=false; }
       }else{
@@ -3907,7 +4051,7 @@ function runTrainingAction(p, body){
       const wu=wrongWordUnits();
       if(!wu.length){ toast("错词本是空的，先打几局吧"); return; }
       dismissModal(body);
-      CONFIG.mode="review"; startGame();
+      setConfig({mode:"review"}); startGame();
       break;
     }
     case "weak": {
@@ -3926,7 +4070,7 @@ function runTrainingAction(p, body){
     }
     case "rhythm": {
       dismissModal(body);
-      CONFIG.mode="sprint"; CONFIG.diff="easy"; CONFIG.lang="cn";
+      setConfig({mode:"sprint",diff:"easy",lang:"cn"});
       startGame();
       toast("🎼 匀速练习：保持节奏比速度更重要");
       break;
@@ -3939,13 +4083,13 @@ function runTrainingAction(p, body){
     }
     case "hard": {
       dismissModal(body);
-      CONFIG.diff="hard"; renderHome();
+      setConfig({diff:"hard"}); renderHome();
       toast("已切到困难难度，加油");
       break;
     }
     default: {
       dismissModal(body);
-      CONFIG.mode="sprint"; startGame();
+      setConfig({mode:"sprint"}); startGame();
     }
   }
 }
@@ -3955,7 +4099,7 @@ function startCustomTraining(units, name){
   if(!units || !units.length){ toast("没有可练习的内容"); return; }
   _pendingTrainUnits=units;
   _pendingTrainName=name||"专项训练";
-  CONFIG.mode="custom";
+  setConfig({mode:"custom"});
   startGame();
 }
 /* 一次性专项训练单元（由训练处方注入，不落盘） */
@@ -4296,7 +4440,7 @@ function openCustomImport(){
     saveStore(); renderHome();
     dismissModal(body);
     toast("✅ 已导入 "+units.length+" 个练习单元");
-    CONFIG.mode="custom";
+    setConfig({mode:"custom"});
     startGame();
   };
   body.onclick=e=>{ if(e.target===body) dismissModal(body); };
@@ -4332,7 +4476,7 @@ function openLibraryManager(){
       const btns=document.createElement("div");
       btns.style.display="flex"; btns.style.gap="6px"; btns.style.flex="0 0 auto";
       const bp=document.createElement("button"); bp.className="btn sm"; bp.textContent="练习";
-      bp.onclick=()=>{ dismissModal(body); CONFIG.mode="custom"; startGame(); };
+      bp.onclick=()=>{ dismissModal(body); setConfig({mode:"custom"}); startGame(); };
       const br=document.createElement("button"); br.className="btn sm"; br.textContent="改名";
       br.onclick=()=>{
         const nm=prompt("词库名称",lib.name||"");
@@ -4394,7 +4538,7 @@ function openWrongWords(){
   };
   body.querySelector("#wwPractice").onclick=()=>{
     dismissModal(body);
-    CONFIG.mode="review";
+    setConfig({mode:"review"});
     startGame();
   };
   body.onclick=e=>{ if(e.target===body) dismissModal(body); };
@@ -5090,6 +5234,7 @@ window.openGuide = openGuide;
 function boot(){
   applySettingsToDOM();
   applyTheme();
+  restoreConfig();      // 恢复玩家上次选择的模式/难度/语言
   bind();
   renderHome();
   // 每日挑战状态刷新

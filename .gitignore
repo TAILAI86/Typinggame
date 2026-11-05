@@ -15,3 +15,6 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
+
+# 本地验证脚本（仅用于开发期回归测试，不随仓库分发）
+.verify/

@@ -361,6 +361,9 @@ canvas{width:100%;display:block;border-radius:8px}
   color:var(--acc);text-shadow:0 2px 12px rgba(0,0,0,.5);animation:ft 1s ease-out forwards;
 }
 @keyframes ft{0%{opacity:0;transform:translateY(0) scale(.8)}22%{opacity:1;transform:translateY(-14px) scale(1.08)}100%{opacity:0;transform:translateY(-58px) scale(1)}}
+/* 生存模式威胁读数的脉冲反馈：推回威胁时闪一下，让机制可见 */
+#threatNum.pulse{animation:tnp .5s ease-out}
+@keyframes tnp{0%{transform:scale(1)}35%{transform:scale(1.28);color:var(--acc)}100%{transform:scale(1)}}
 .particle{position:absolute;width:7px;height:7px;border-radius:2px;pointer-events:none;z-index:9;animation:pt .85s ease-out forwards}
 @keyframes pt{0%{opacity:1;transform:translate(0,0) rotate(0) scale(1)}100%{opacity:0;transform:translate(var(--dx),var(--dy)) rotate(var(--rot)) scale(.25)}}
 
@@ -1154,7 +1157,12 @@ function checkinState(){
   let nextTier;
   if(broken) nextTier=1;
   else nextTier=(prevTier%7)+1;
-  return { streak:chain, nextTier, gotCount:nextTier-1, tier:nextTier, done, broken };
+  // 对外展示的连续天数必须与"今天签到能拿第几档"保持一致：
+  //   断签后连续记录已经归零，若仍显示断签前的旧值（如"连续 5 天"），
+  //   玩家会以为连续记录还在，下一天签到却只拿到第 1 档奖励。
+  //   真正的连续天数由 doCheckin 在签到时重新计算。
+  const shownStreak = broken ? 0 : chain;
+  return { streak:shownStreak, nextTier, gotCount:nextTier-1, tier:nextTier, done, broken };
 }
 /* 执行签到，返回奖励信息（已签则返回 null） */
 function doCheckin(){
@@ -1773,7 +1781,7 @@ function loadStore(){
     const raw=localStorage.getItem(SAVE_KEY);
     if(!raw) return defaultStore();
     const d=JSON.parse(raw);
-    if(!d||!Array.isArray(d.slots)) return defaultStore();
+    if(!d||!Array.isArray(d.slots)||!d.slots.length) return defaultStore();
     return loadStoreFrom(d);
   }catch(e){ return defaultStore(); }
 }
@@ -1782,7 +1790,9 @@ function loadStoreFrom(d){
     const def=defaultStore();
     // 逐槽补齐缺失字段，保证旧存档平滑升级
     d.slots=d.slots.map((s,i)=>{
-      const base=newSlotData(def.slots[i].name);
+      // 存档可复制到 6 个槽位；默认模板只有 3 个，新增槽位必须独立生成名称，
+      // 不能直接访问 def.slots[i].name（第 4 个槽会在刷新时越界并导致整份存档回退）。
+      const base=newSlotData((def.slots[i]&&def.slots[i].name)||("存档 "+(i+1)));
       const merged=Object.assign(base,s||{});
       // 二级字段单独兜底（Object.assign 遇到 undefined 会覆盖默认值）
       merged.stats=Object.assign({ games:0, chars:0, words:0, time:0, bestWpm:0, bestCombo:0,
@@ -1851,9 +1861,24 @@ function loadStoreFrom(d){
     d.checkin.chain=Number(d.checkin.chain)||0;
     d.checkin.total=Number(d.checkin.total)||0;
     if(!d.checkin.chain && d.checkin.streak) d.checkin.chain=d.checkin.streak;
-    d.active=d.active||0; d.v=1;
+    d.v=1;
     d.rev=Number(d.rev)||0;
     d.savedAt=Number(d.savedAt)||0;
+    // 活跃槽位必须落在实际槽位范围内。
+    //   导入的存档若带着越界的 active（如 99），S() 会返回 undefined，
+    //   之后任何一处 S().stats 都会抛 TypeError —— 整个游戏直接打不开。
+    d.active=Number(d.active)||0;
+    if(!(d.active>=0 && d.active<d.slots.length)) d.active=0;
+    // 每日挑战配置同样要校验：模式/难度必须是真实存在的 id，
+    //   否则首页渲染（MODES.find(...).ico）会直接崩溃。
+    if(d.daily && d.daily.cfg && typeof d.daily.cfg==="object"){
+      const c=d.daily.cfg;
+      const okMode=MODES.some(m=>m.id===c.mode);
+      const okDiff=DIFFS.some(x=>x.id===c.diff);
+      const okLang=["cn","en","mix"].indexOf(c.lang)>=0;
+      if(!okMode||!okDiff||!okLang) d.daily.cfg=null;
+      else d.daily.cfg={ mode:c.mode, diff:c.diff, lang:c.lang, seed:Number(c.seed)||0 };
+    }
     return d;
 }
 /* ------------------------------------------------------------ 存档写入层 */
@@ -1874,7 +1899,7 @@ function readDiskStore(){
     const raw=localStorage.getItem(SAVE_KEY);
     if(!raw) return null;
     const d=JSON.parse(raw);
-    if(!d||!Array.isArray(d.slots)) return null;
+    if(!d||!Array.isArray(d.slots)||!d.slots.length) return null;
     return d;
   }catch(e){ return null; }
 }
@@ -2170,7 +2195,7 @@ function toast(msg,kind){
 
 /* ------------------------------------------------------------ 游戏状态 */
 const G = {
-  on:false, mode:"sprint", diff:"normal", lang:"cn", daily:false,
+  on:false, mode:"sprint", diff:"normal", baseDiff:"normal", lang:"cn", daily:false, dailyCfg:null,
   units:[], idx:0, ci:0, gi:0,          // gi = 当前拼音音节索引
   input:"",                              // 当前单元已输入的字符串
   combo:0, maxCombo:0, correct:0, wrong:0, score:0,
@@ -2184,8 +2209,23 @@ const G = {
   paused:false, pauseAt:0, pauseShift:0,         // 暂停状态
   ghost:null, timeline:[],                       // 幽灵对手与本局时间线
   wordScore:0, perfect:true, lastKeyTs:0, keyStat:{},
-  rhythm:[], rhythmBest:null                          // 击键间隔序列 + 本局节奏统计
+  rhythm:[], rhythmBest:null,                         // 击键间隔序列 + 本局节奏统计
+  result:null                                        // 结算快照：战报与结算页共用同一口径
 };
+/* 生存模式：完成一个词能把威胁条推回多少点。
+   威胁条每秒上涨 threatRate 点（基础 3.2，随「陨星坠落」技能递减），
+   完成一个词可以把它推回一段，推回量随连击提升 —— 于是"能活多久"
+   取决于打字又快又准，而不是固定三十来秒。
+   参数取向（由 .verify/sweep.js 实测校准）：
+     · 完全不动手 → 约 32 秒被追上
+     · 慢速低连击 → 约 48 秒被追上
+     · 中等速度+连击 → 威胁条基本压得住，能活到靠失误数决定
+     · 高手 → 可长期续命，"撑过 120 秒"成就因此真正可达
+   注：推回量刻意小于"满速无失误"时的上涨量，
+   保证威胁条始终是一个需要管理的压力，而不是可以无视的摆设。 */
+const SURVIVE_PUSH_BASE=3;         // 完成一个词的基础推回量
+const SURVIVE_PUSH_PER_COMBO=0.1;  // 每点连击的额外推回量（上限 25 连击）
+const SURVIVE_MISTAKE_SPIKE=6;     // 失误时威胁条的额外冲击（约等于两秒进度）
 const CONFIG = { mode:"sprint", diff:"normal", lang:"cn" };
 /* 玩家的模式/难度/语言选择写入存档 —— 刷新页面后不再被重置回默认值。
    注意：这些属于"用户偏好"，存全局 settings（跨存档槽共享），不是各槽的进度。 */
@@ -2337,13 +2377,20 @@ function startGame(dailyCfg){
     G.mode=CONFIG.mode; G.diff=CONFIG.diff; G.lang=CONFIG.lang;
   }
   G.daily=!!dailyCfg;
-  const d=DIFFS.find(x=>x.id===G.diff)||DIFFS[1];
+  // 保存本局挑战配置，结算页“再来一局”和 R 键必须重开同一道每日题。
+  G.dailyCfg=dailyCfg?Object.assign({},dailyCfg):null;
+  G.result=null;
 
   // 词池解锁校验
   const sk=s.skills||{};
   if(G.lang==="mix"&&!(sk.polyglot>=1)) G.lang="cn";
   // 难度可能被词池解锁条件降级（如"地狱"需要通识），此时回退到普通
   if((G.diff==="hard"||G.diff==="night") && !(sk.savant>=1) && !(sk.erudite>=1)) G.diff="normal";
+  // 难度降级之后才能取难度定义 —— 否则生命值仍按降级前的难度算：
+  //   选"地狱"但没解锁通识 → 词库降级为普通，生命却仍是地狱的 1 条。
+  const d=DIFFS.find(x=>x.id===G.diff)||DIFFS[1];
+  // 生存/登峰模式升档始终以开局难度为基准，不能用已升档的 G.diff 反复累加。
+  G.baseDiff=G.diff;
 
   G.rng = dailyCfg ? mulberry32(dailyCfg.seed) : mulberry32((Date.now()^hashStr(String(Math.random())))|0);
   G.units=[]; G.idx=0; G.ci=0; G.gi=0; G.input="";
@@ -2430,7 +2477,11 @@ function startGame(dailyCfg){
   const initialMode=(STORE.settings.pyMode||"full")==="initial";
   let guide;
   const touch=isTouchDevice();
-  if(touch){
+  if(G.mode==="survival"){
+    // 生存模式：威胁条可被推回，必须把规则讲清楚，否则玩家只会以为在倒计时
+    guide=`<span>💀 威胁条持续上涨 —— <b style="color:var(--acc)">打完一个词就能把它推回</b>，连击越高推得越多</span>`+
+          `<span><kbd>Esc</kbd> 退出</span><span><kbd>空格</kbd> 暂停</span>`;
+  } else if(touch){
     guide = `<span>👆 点击下方键盘输入</span>` +
             (G.lang==="en" ? "" : initialMode
               ? `<span>已启用<b style="color:var(--acc)">首字母输入</b>（点字母更快）</span>`
@@ -2452,6 +2503,10 @@ function startGame(dailyCfg){
   }catch(e){}
   G.timer=setInterval(tick,100);
 }
+/* 重开当前对局：每日挑战沿用原模式、难度、语种与日期种子。 */
+function restartGame(){
+  startGame(G.daily&&G.dailyCfg?Object.assign({},G.dailyCfg):null);
+}
 
 /* -------------------------------------------------------------- 游戏循环 */
 function tick(){
@@ -2472,7 +2527,8 @@ function tick(){
     const up=Math.floor(G.elapsed/25);
     if(up>0){
       const order=["easy","normal","hard","night"];
-      const idx=Math.min(order.indexOf(G.diff)+up,3);
+      const base=Math.max(0,order.indexOf(G.baseDiff||G.diff));
+      const idx=Math.min(base+up,3);
       if(order[idx]!==G.diff){ G.diff=order[idx]; }
     }
   } else if(G.mode==="climb"){
@@ -2506,10 +2562,24 @@ window.addEventListener("keydown",e=>{
     if(e.key==="Escape"){ e.preventDefault(); if(G.paused) togglePause(); else if(STORE.settings.focusMode) toggleFocusMode(false); else quitGame(); return; }
     // 专注模式快捷键：F2（不与任何字母冲突）
     if(e.key==="F2"){ e.preventDefault(); toggleFocusMode(); return; }
+    // 空格：暂停 / 继续
+    //   引导与提示行都承诺了"空格 暂停"，但旧实现只在"已暂停"时才响应空格，
+    //   于是玩家按空格根本停不下来（只能去点 ⏸️ 按钮），快捷键形同虚设。
+    //   例外：若当前目标词确实需要输入空格（自定义词库可能出现带空格的词条），
+    //   空格仍应正常输入，不能被"暂停"抢走。
     if(e.key===" "&&G.paused){ e.preventDefault(); togglePause(); return; }
     if(G.paused) return;                       // 暂停中不处理游戏输入
     // IME 组合期间（候选词未确定）的按键不应计入判定
+    //   注意：空格在输入法里是"选词"键，必须先于下面的暂停逻辑判断，
+    //   否则用输入法打中文时按空格会误触发暂停。
     if(imeBlocksKey(e)) return;
+    // Ctrl/Alt/Shift+空格 是系统快捷键（切换输入法、窗口菜单等），不当作暂停
+    if(e.key===" "&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
+      const u=G.units&&G.units[G.idx];
+      const exp=u?activeInput(u):"";
+      const needSpace=!!u && G.ci<exp.length && exp[G.ci]===" ";
+      if(!needSpace){ e.preventDefault(); togglePause(); return; }
+    }
     // 收藏快捷键：Shift+F
     // 注意：绝不能用裸 F 键 —— 它是英文字母，打到含 f 的单词会直接卡住。
     // 中文拼音全为小写，因此用 Shift+F 既不与拼音冲突，也符合"辅助键要显式"的直觉。
@@ -2532,7 +2602,7 @@ window.addEventListener("keydown",e=>{
   if(CUR_VIEW==="Home"){
     if(e.key==="Enter"){ startGame(); }
   } else if(CUR_VIEW==="Result"){
-    if(e.key==="r"||e.key==="R"){ startGame(); }
+    if(e.key==="r"||e.key==="R"){ restartGame(); }
     if(e.key==="Escape"){ showView("Home"); }
   }
 });
@@ -2627,6 +2697,9 @@ function onMistake(ch){
   }
   if(G.mode==="survival"||G.mode==="climb"){
     G.lives--;
+    // 生存模式：失误让威胁条额外冲高 —— 失误的代价不止掉一条命，
+    //   也让"逼近死亡"的压迫感立刻可见，玩家能直观看到自己正在被打崩。
+    if(G.mode==="survival") G.threat=Math.min(100,G.threat+SURVIVE_MISTAKE_SPIKE);
     if(G.lives<=0){ endGame(); return; }
     const u=G.units[G.idx];
     G.ci=0; G.input=""; u.typed=""; G.gi=0;
@@ -2652,6 +2725,23 @@ function completeWord(){
   if(G.wordScore>=100){
     floatTxt("+"+G.wordScore,u); G.wordScore=0;
   }
+  // 生存模式：完成一个词就把威胁条推回去一些（连击越高推得越多）
+  //   旧实现威胁条只涨不回 —— 玩家打得多好都必然在约 31 秒后被判死，
+  //   "无限生存"名不副实，且"撑过 120 秒"的成就在数学上永远无法达成。
+  //   现在威胁条变成"打字越准越能扛"的博弈：慢或乱打字会被追上，打得稳就能续命。
+  if(G.mode==="survival"){
+    const back=SURVIVE_PUSH_BASE+Math.min(G.combo,25)*SURVIVE_PUSH_PER_COMBO;
+    const before=G.threat;
+    G.threat=Math.max(0,G.threat-back);
+    // 推回反馈：让玩家看见"这一词把威胁条压下去多少"，
+    //   否则威胁条的变化悄无声息，玩家学不到"连击越高越能续命"这条核心规则。
+    const pushed=Math.round(before-G.threat);
+    if(pushed>0){
+      floatTxt("-"+pushed+" 威胁",u);
+      const tb=$("#threatNum");
+      if(tb){ tb.classList.remove("pulse"); void tb.offsetWidth; tb.classList.add("pulse"); }
+    }
+  }
   G.idx++; G.ci=0; G.input=""; G.gi=0;
   G.timeline.push(Date.now()-G.startTs);   // 记录每词完成时刻，供幽灵回放
   // 屏幕阅读器播报（每完成一个词播报一次，避免过于频繁）
@@ -2666,8 +2756,14 @@ function completeWord(){
       G.stageDone=0; G.stage++;
       if(G.stage>=10){ S().flags.peak=true; endGame(); return; }
       G.stageNeed=6+G.stage*2;
+      // 难度阶梯以玩家选定的难度为基准往上爬。
+      //   旧实现直接把难度钉死在固定的 easy→night 阶梯上，
+      //   玩家选"地狱"开局也会被拉回"轻松" —— 难度选择形同虚设，
+      //   且与生存模式（已按 baseDiff 升档）的行为自相矛盾。
       const order=["easy","normal","hard","night"];
-      G.diff=order[Math.min(Math.floor(G.stage/3),3)];
+      const base=Math.max(0,order.indexOf(G.baseDiff||"easy"));
+      const step=Math.floor(G.stage/3);
+      G.diff=order[Math.min(base+step,3)];
       toast("🏔️ 抵达第 "+(G.stage+1)+" 关！");
     }
   }
@@ -2918,16 +3014,34 @@ function updateHud(){
   if(G.mode==="survival"){
     let bar=$("#threatBar");
     if(!bar){ bar=document.createElement("div"); bar.id="threatBar";
-      bar.style.cssText="position:absolute;left:0;top:0;height:3px;width:100%;background:transparent;z-index:7";
+      bar.style.cssText="position:absolute;left:0;top:0;height:4px;width:100%;background:transparent;z-index:7";
       const fill=document.createElement("i");
       fill.style.cssText="display:block;height:100%;width:0;background:linear-gradient(90deg,#ffb454,#ff6b81);transition:width .2s";
       bar.appendChild(fill);
       $("#playArea").appendChild(bar);
     }
     const fill=bar.firstChild;
-    if(fill) fill.style.width=clamp(G.threat,0,100)+"%";
+    const pct=clamp(G.threat,0,100);
+    if(fill){
+      fill.style.width=pct+"%";
+      // 危险度越高颜色越红 —— 玩家不用盯着数字也能感到逼近死亡
+      fill.style.background = pct>=75 ? "linear-gradient(90deg,#ff6b81,#ff2d55)"
+                             : pct>=40 ? "linear-gradient(90deg,#ffb454,#ff6b81)"
+                             : "linear-gradient(90deg,#ffcf6b,#ffb454)";
+    }
+    // 威胁百分比读数：光有一条 4px 的细线，玩家根本不知道还剩多少余地
+    let num=$("#threatNum");
+    if(!num){
+      num=document.createElement("div"); num.id="threatNum";
+      num.style.cssText="position:absolute;right:8px;top:8px;font-size:11px;font-weight:700;color:var(--dim2);z-index:7;pointer-events:none;transition:color .2s";
+      $("#playArea").appendChild(num);
+    }
+    num.textContent="威胁 "+Math.round(pct)+"%";
+    num.style.color = pct>=75 ? "var(--bad)" : pct>=40 ? "var(--warn)" : "var(--dim2)";
   } else {
     const bar=$("#threatBar");
+    const num=$("#threatNum");
+    if(num) num.remove();
     if(bar) bar.remove();
   }
 }
@@ -2965,7 +3079,7 @@ function saveGhost(){
   const s=S();
   // 幽灵只用于竞速模式的对手回放 —— 练习类模式不计时，记录幽灵毫无意义，
   // 反而会把"历史最佳速度"污染成不可信的高数值。
-  if(!GHOST_MODES.indexOf(G.mode)>=0) return;
+  if(GHOST_MODES.indexOf(G.mode)<0) return;
   if(!s.stats.ghost) s.stats.ghost={ wpm:0, timeline:[], at:0, byMode:{} };
   if(!s.stats.ghost.byMode) s.stats.ghost.byMode={};
   const wpm=wpmOf(G.correct,G.elapsed);
@@ -3181,6 +3295,29 @@ function setPyMode(mode){
    另有"仅拼音"设置项，强制忽略 IME 提交的汉字 */
 let IME = { composing:false, lastCommit:"", commitAt:0 };
 function imeReset(){ IME.composing=false; IME.lastCommit=""; IME.commitAt=0; }
+/* 当前已经完成的汉字数。G.ci 是拼音/首字母光标，不是汉字下标，
+   因而不能再用 typed.length 或“每字 ci+1”来推进，否则全拼会错位。 */
+function imeCharPos(u){
+  if(!u||u.lang!=="cn") return 0;
+  const initial=(STORE.settings.pyMode||"full")==="initial";
+  let acc=0;
+  for(let i=0;i<u.syl.length;i++){
+    const len=initial?1:String(u.syl[i]).length;
+    if(G.ci<acc+len) return i;
+    acc+=len;
+  }
+  return u.syl.length;
+}
+/* 第 i 个音节在"生效输入串"里占几个字符。
+   全拼模式 = 拼音音节长度（如 "ni" 占 2）；首字母模式 = 1。
+   用它把"输入法提交一个汉字"折算成等价的按键量，
+   使 IME 与拼音直打两条路径的统计口径完全一致。 */
+function sylInputLen(u,i){
+  const initial=(STORE.settings.pyMode||"full")==="initial";
+  if(initial) return 1;
+  const s=u&&u.syl&&u.syl[i];
+  return Math.max(1,String(s==null?"":s).length);
+}
 /* IME 提交了文本：尝试匹配当前目标汉字 */
 function onImeCommit(text){
   if(!G.on||G.paused) return;
@@ -3190,20 +3327,29 @@ function onImeCommit(text){
   if(!u||u.lang!=="cn") return;                            // 英文目标不需要 IME
   const t=String(text).trim();
   if(!t) return;
-  // IME 一次可能提交多个汉字（如"你好"），逐字推进
+  // IME 一次可能提交多个汉字（如"你好"），逐字推进；
+  // 每接收一个汉字，就把拼音光标移到对应音节末尾，兼容全拼与首字母。
   for(const ch of t){
     const cur=G.units[G.idx];
     if(!cur||cur.lang!=="cn") break;
     const target=(cur.text||"");
-    const pos=cur.typed?(cur.typed.length):0;
+    const pos=imeCharPos(cur);
     const want=target[pos];
     if(!want) break;
     if(ch===want){
+      const prevCi=G.ci;
+      const units=sylInputLen(cur,pos);
+      let nextCi=prevCi+units;
       cur.typed=(cur.typed||"")+ch;
-      G.ci++; G.correct++; G.combo++; G.cnChars++;
+      G.ci=nextCi; G.gi=pos+1; G.input+=ch;
+      // 计数口径必须与拼音直打一致：
+      //   拼音直打"你好"要敲 5 个键（ni+hao），IME 直输只需提交 2 个汉字。
+      //   若按"提交一个汉字 +1"计数，同一份内容用输入法打分会低到离谱，
+      //   速度、连击、语种统计与"中英各 1000 字"成就全部失真。
+      G.correct+=units; G.combo+=units; G.cnChars+=units;
       if(G.combo>G.maxCombo) G.maxCombo=G.combo;
       Audio2.key(G.combo);
-      if(cur.typed.length>=target.length){ completeWord(); }
+      if(G.ci>=activeInput(cur).length){ completeWord(); }
       else updateFlow();
     } else {
       onMistake(ch);
@@ -3321,6 +3467,11 @@ function spawnParticle(anchor){
 /* -------------------------------------------------------------- 结算 */
 function endGame(){
   if(!G.on) return;   // 防止重复结算导致统计翻倍
+  // 最后一词往往在两次 tick 之间完成，结算前补记真实用时，避免少算最后一小段。
+  if(!G.paused){
+    G.elapsed=Math.max(0,(Date.now()-G.startTs)/1000);
+    if(G.limit>0) G.elapsed=Math.min(G.elapsed,G.limit);
+  }
   G.on=false;
   G.paused=false;
   clearInterval(G.timer);
@@ -3332,6 +3483,7 @@ function endGame(){
   if(!s.flags) s.flags={};
   const isCN=G.lang==="cn";
   const finalScore=Math.round(G.score*(0.6+acc/100*0.6)*(G.mode==="precision"?(G.perfect?1.5:1):1));
+  G.result={ wpm, acc, finalScore };
   const xp=Math.round(finalScore/10+G.correct/4);
   const coins=Math.round(finalScore/60+G.maxCombo*0.6);
   // 练习类模式（自定义/错词/收藏夹）不计时，速度与得分不可与限时挑战横向比较，
@@ -3428,10 +3580,11 @@ function renderResult(r){
   const s=S();
   const modeName=(MODES.find(m=>m.id===G.mode)||{}).name||"挑战";
   const isCN=G.lang==="cn";
+  const diffName=(DIFFS.find(d=>d.id===G.diff)||{}).name||"普通";
   const w=$("#resultWrap");
   let html="";
-  html+=`<div class="res-title">${G.mode==="survival"?"生存结束":G.mode==="climb"?"登顶完成！":G.mode==="custom"?"词库练完！":G.mode==="review"?"复习完成！":G.mode==="precision"?(r.acc>=100?"完美通关！":"挑战结束"):"风暴结束"}</div>`;
-  html+=`<div class="res-sub">${modeName} · ${DIFFS.find(d=>d.id===G.diff).name} · ${G.lang==="en"?"英文":G.lang==="mix"?"中英混合":"中文拼音"}${G.customName?" · <b style='color:var(--acc)'>"+esc(G.customName)+"</b>":""}</div>`;
+  html+=`<div class="res-title">${G.mode==="survival"?"生存结束":G.mode==="climb"?"登顶完成！":G.mode==="custom"?"词库练完！":G.mode==="review"?"复习完成！":G.mode==="fav"?"收藏练完！":G.mode==="precision"?(r.acc>=100?"完美通关！":"挑战结束"):"风暴结束"}</div>`;
+  html+=`<div class="res-sub">${modeName} · ${diffName} · ${G.lang==="en"?"英文":G.lang==="mix"?"中英混合":"中文拼音"}${G.customName?" · <b style='color:var(--acc)'>"+esc(G.customName)+"</b>":""}</div>`;
   if(r.newRec.length) html+=`<div class="newrec">🏅 新纪录：${r.newRec.join(" / ")}</div>`;
   // 练习类模式不参与全局"历史最佳"，但仍展示该模式的个人最佳 ——
   //   否则练习完一局毫无反馈，玩家会以为自己的成绩没被记录。
@@ -3442,6 +3595,15 @@ function renderResult(r){
   //   判定统一用 G.perfect（游戏内"完美"的唯一口径），而不是 G.wrong===0 ——
   //   两者在护盾/专注技能下会不一致，用错口径会出现"明明失误过却发完美徽章"。
   if(G.perfect && G.correct>0) html+=`<div class="newrec" style="background:linear-gradient(90deg,#1f9d55,#2bb3c0);color:#04210f">🌟 零失误完美对局！</div>`;
+  // 生存模式：存活时长才是这个模式的核心成绩（速度只反映打字快慢），
+  //   不单独展示的话玩家看不出自己"扛了多久"。
+  if(G.mode==="survival"){
+    const sec=Math.round(G.elapsed||0);
+    html+=`<div class="res-sub" style="opacity:.9">⏱ 存活 <b style="color:var(--acc)">${sec}</b> 秒 · 打出 <b style="color:var(--warn)">${G.words}</b> 个词${G.threat>=99.5?" · <b style=\"color:var(--bad)\">被威胁条追上</b>":""}</div>`;
+  }
+  if(G.mode==="climb"){
+    html+=`<div class="res-sub" style="opacity:.9">🏔️ 抵达第 <b style="color:var(--acc)">${Math.min(G.stage,10)}</b> 关 / 共 10 关</div>`;
+  }
   html+=`<div class="res-grid">`;
   html+=`<div class="res-cell hero"><div class="v">${r.wpm}</div><div class="k">${isCN?"字/分":"WPM"}</div></div>`;
   html+=`<div class="res-cell"><div class="v">${r.acc}%</div><div class="k">准确率</div></div>`;
@@ -3480,7 +3642,7 @@ function renderResult(r){
       </div></div>`;
   }
   html+=`<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-    <button type="button" class="btn pri" onclick="startGame()">🔄 再来一局 <kbd>R</kbd></button>
+    <button type="button" class="btn pri" onclick="restartGame()">🔄 再来一局 <kbd>R</kbd></button>
     <button type="button" class="btn" onclick="showView('Home');renderHome()">🏠 返回首页</button>
     <button type="button" class="btn" onclick="showView('Skill');renderTree()">🌿 分配技能点</button>
     <button type="button" class="btn" onclick="openShareCard()">🖼️ 生成战报</button>
@@ -3559,7 +3721,9 @@ function renderHome(){
   }
   // 每日挑战
   const dc=STORE.daily;
-  if(dc.date!==todayKey() || !dc.cfg){
+  // 配置无效（存档被手改或来自旧版本）时重新派发，而不是让首页渲染崩掉
+  if(dc.date!==todayKey() || !dc.cfg ||
+     !MODES.some(m=>m.id===dc.cfg.mode) || !DIFFS.some(x=>x.id===dc.cfg.diff)){
     const r=mulberry32(hashStr(todayKey()));
     const modes=["sprint","survival","combo","climb"];   // 不含 precision（需限定条件）
     const cfg={ mode:modes[Math.floor(r()*modes.length)], diff:DIFFS[Math.floor(r()*4)].id,
@@ -3568,8 +3732,8 @@ function renderHome(){
     dc.cfg=cfg; dc.date=todayKey(); dc.done=false; dc.best=0;
     saveStore();
   }
-  const dm=MODES.find(m=>m.id===dc.cfg.mode);
-  const dd=DIFFS.find(d=>d.id===dc.cfg.diff);
+  const dm=MODES.find(m=>m.id===dc.cfg.mode)||MODES[0];
+  const dd=DIFFS.find(d=>d.id===dc.cfg.diff)||DIFFS[1];
   $("#dailyDesc").innerHTML=`今日题目：<b style="color:var(--txt)">${dm.ico} ${dm.name}</b> · ${dd.name} · ${dc.cfg.lang==="cn"?"中文":"英文"} ${dc.done?`｜今日已得 <b style="color:var(--gold)">${fmt(dc.best)}</b> 分`:""}`;
   $("#btnDaily").textContent=dc.done?"🎯 每日挑战（已完成）":"🎯 每日挑战";
   $("#btnDaily2").textContent=dc.done?"再挑战":"进入";
@@ -4364,11 +4528,9 @@ function openSettings(){
       const f=inp.files[0]; if(!f) return;
       const rd=new FileReader();
       rd.onload=()=>{
-        try{
-          const d=JSON.parse(rd.result);
-          if(!d||!Array.isArray(d.slots)) throw new Error("bad");
-          STORE=d; saveStore(); applyTheme(); renderHome(); dismissModal(body); toast("存档导入成功");
-        }catch(e){ toast("导入失败：文件格式不正确"); }
+        // 与数据管理面板共用校验、旧档迁移、确认和设置恢复流程，
+        // 不再把未经补齐的 JSON 直接塞进运行时存档。
+        if(importSaveData(String(rd.result||""))) dismissModal(body);
       };
       rd.readAsText(f);
     };
@@ -4552,6 +4714,9 @@ function togglePause(){
     G.paused=false;
     G.pauseShift=(Date.now()-G.pauseAt);
     G.startTs+=G.pauseShift;      // 暂停时长不计入用时
+    // 击键间隔与技能免疫也按有效游戏时间计算，不能把休息时长采样进去。
+    if(G.lastKeyTs) G.lastKeyTs+=G.pauseShift;
+    if(G.immuneUntil) G.immuneUntil+=G.pauseShift;
     const m=document.querySelector("#pauseMask");
     if(m) m.remove();
     return;
@@ -4681,7 +4846,15 @@ function renderVkb(){
   bk.onclick=(e)=>{ e.preventDefault(); vkbBackspace(); };
   const sp=document.createElement("button");
   sp.className="vkb-key sp"; sp.textContent="空格";
-  sp.onclick=(e)=>{ e.preventDefault(); handleKey(" "); };
+  // 与物理空格键保持一致：目标词不需要空格时，空格 = 暂停/继续
+  sp.onclick=(e)=>{
+    e.preventDefault();
+    const u=G.units&&G.units[G.idx];
+    const exp=u?activeInput(u):"";
+    const needSpace=!!u && G.ci<exp.length && exp[G.ci]===" ";
+    if(needSpace){ handleKey(" "); return; }
+    togglePause();
+  };
   const pau=document.createElement("button");
   pau.className="vkb-key wide"; pau.textContent="⏸";
   pau.onclick=(e)=>{ e.preventDefault(); togglePause(); };
@@ -4846,7 +5019,7 @@ function drawShareCard(data){
   c.fillText("用 AI 写的网页打字游戏", W/2, 700);
   c.font="15px 'SF Mono',Menlo,monospace";
   c.fillStyle=dark?"#61729b":"#8494b8";
-  c.fillText("github.com/TAILAI86/game", W/2, 730);
+  c.fillText("github.com/TAILAI86/Typinggame", W/2, 730);
   // 边框
   c.strokeStyle=dark?"rgba(255,255,255,.10)":"rgba(0,0,0,.08)";
   c.lineWidth=2; c.strokeRect(1,1,W-2,H-2);
@@ -4855,13 +5028,14 @@ function drawShareCard(data){
 function openShareCard(){
   const slot=$("#shareSlot");
   if(!slot) return;
-  const isCN=G.lang==="en";
+  const result=G.result;
   const data={
     title:(MODES.find(m=>m.id===G.mode)||{name:"挑战"}).name+" · "+(DIFFS.find(d=>d.id===G.diff)||{name:""}).name,
-    wpm:Math.round((G.correct/5)/Math.max(G.elapsed/60,1/600)),
-    speedLabel:isCN?"字 / 分":"WPM",
-    acc:Math.round(G.correct/(G.correct+G.wrong||1)*100),
-    combo:G.maxCombo, score:Math.round(G.score),
+    // 与结算页共用速度、准确率、加成后得分；英文才使用 WPM 标签。
+    wpm:result?result.wpm:wpmOf(G.correct,G.elapsed),
+    speedLabel:G.lang==="en"?"WPM":"字 / 分",
+    acc:result?result.acc:Math.round(G.correct/(G.correct+G.wrong||1)*100),
+    combo:G.maxCombo, score:result?result.finalScore:Math.round(G.score),
     footer:new Date().toLocaleDateString("zh-CN")+" · "+G.words+" 词 · 打字风暴"
   };
   const cv=drawShareCard(data);
@@ -4984,11 +5158,11 @@ function exportSaveData(){
 function importSaveData(text){
   try{
     const d=JSON.parse(text);
-    if(!d || !Array.isArray(d.slots)) throw new Error("不是有效的存档文件");
+    if(!d || !Array.isArray(d.slots) || !d.slots.length) throw new Error("不是有效的存档文件");
     if(!confirm("导入将覆盖当前全部数据，确定继续？\n（建议先导出备份）")) return false;
     STORE=loadStoreFrom(d);
     saveStore();
-    applyTheme(); renderHome();
+    restoreConfig(); applySettingsToDOM(); applyTheme(); renderHome();
     toast("✅ 存档已导入");
     return true;
   }catch(e){
@@ -5107,10 +5281,18 @@ function openSaveMenu(){
     btns.appendChild(rn);
     const cp=document.createElement("button"); cp.className="btn sm"; cp.textContent="复制";
     cp.onclick=()=>{
-      const ni=STORE.slots.findIndex((x,j)=>j!==i&&x.name===sl.name+" 副本");
-      const idx=ni>=0?ni:(STORE.slots.length<6?STORE.slots.length:1);
-      if(STORE.slots.length>=6){ toast("最多 6 个存档"); return; }
-      STORE.slots.push(Object.assign({},JSON.parse(JSON.stringify(sl)),{name:sl.name+" 副本"}));
+      // 复制应当"就地更新"已有的同名副本，而不是每次都追加一个新槽位。
+      //   旧实现算出了 ni/idx 却从未使用，导致连续复制同一个存档会产生
+      //   多个同名"存档 X 副本"，玩家在存档列表里无法分辨哪个是哪个。
+      const copyName=sl.name+" 副本";
+      const existing=STORE.slots.findIndex((x,j)=>j!==i&&x.name===copyName);
+      const snapshot=Object.assign({},JSON.parse(JSON.stringify(sl)),{name:copyName});
+      if(existing>=0){
+        STORE.slots[existing]=snapshot;
+      }else{
+        if(STORE.slots.length>=6){ toast("最多 6 个存档"); return; }
+        STORE.slots.push(snapshot);
+      }
       saveStore(); dismissModal(body); openSaveMenu(); toast("已复制存档");
     };
     btns.appendChild(cp);
@@ -5142,7 +5324,7 @@ function bind(){
     // 输入法提交后若仍未成功匹配，提示玩家可切英文输入
     if(txt && G.on && G.units[G.idx] && G.units[G.idx].lang==="cn"){
       const u=G.units[G.idx];
-      const want=(u.text||"")[u.typed?u.typed.length:0];
+      const want=(u.text||"")[imeCharPos(u)];
       if(want && txt.indexOf(want)<0){
         const tip=$("#imeTip");
         if(tip){ tip.style.display="flex"; }

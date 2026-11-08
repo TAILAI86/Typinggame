@@ -1053,18 +1053,18 @@ const ACHIEVEMENTS = [
   { id:"multiLib", ic:"📂", nm:"博采众长", ds:"同时拥有 3 个自定义词库", chk:s=>(s&&Array.isArray(s.customWords)?s.customWords.length:0)>=3 },
   { id:"fav5",     ic:"⭐", nm:"拾级而上", ds:"收藏 5 个想练的词", chk:s=>Object.keys((s&&s.favorites)||{}).length>=5 },
   { id:"favMode",  ic:"🎯", nm:"有的放矢", ds:"完成一次收藏夹练习", chk:s=>flagOf(s,"favDone") },
-  { id:"mobile",   ic:"📱", nm:"随时随地", ds:"启用虚拟键盘（触屏也能玩）", chk:s=>!!(s&&s.settings&&s.settings.vkb==="always") },
+  { id:"mobile",   ic:"📱", nm:"随时随地", ds:"启用虚拟键盘（触屏也能玩）", chk:()=>!!(STORE.settings&&STORE.settings.vkb==="always") },
   { id:"balance",  ic:"🖐️", nm:"八指并用", ds:"手指均衡度达到 60% 以上", chk:s=>{
     const fb=fingerBalance((s&&s.stats&&s.stats.keys)||{});
     return fb.total>0 && fb.balance>=0.6;
   }},
-  { id:"rhythm85", ic:"🎼", nm:"节拍器", ds:"单局节奏稳定性达到 85 分", chk:s=>{
-    const rb=(s&&s.stats&&s.stats.rhythmBest)||null;
-    return !!rb && (rb.score||0)>=85;
+  { id:"rhythm85", ic:"🎼", nm:"节拍器", ds:"累计节奏稳定性达到 85 分", chk:s=>{
+    const rs=rhythmStats((s&&s.stats&&s.stats.rhythm)||[]);
+    return !!rs && (rs.score||0)>=85;
   }},
-  { id:"rhythm90", ic:"🥁", nm:"行云流水", ds:"单局节奏稳定性达到 90 分", chk:s=>{
-    const rb=(s&&s.stats&&s.stats.rhythmBest)||null;
-    return !!rb && (rb.score||0)>=90;
+  { id:"rhythm90", ic:"🥁", nm:"行云流水", ds:"累计节奏稳定性达到 90 分", chk:s=>{
+    const rs=rhythmStats((s&&s.stats&&s.stats.rhythm)||[]);
+    return !!rs && (rs.score||0)>=90;
   }},
   { id:"rhythm500",ic:"⏱️", nm:"节奏大师", ds:"累计采集 500 次击键间隔", chk:s=>{
     const r=(s&&s.stats&&s.stats.rhythm)||[];
@@ -1078,6 +1078,28 @@ const ACHIEVEMENTS = [
   { id:"ck30",    ic:"👑", nm:"月度常客", ds:"累计签到 30 天", chk:s=>((s&&s.flags&&s.flags.ckTotal)||0)>=30 },
   { id:"goalDone", ic:"🎯", nm:"日拱一卒", ds:"完成一次每日目标", chk:s=>flagOf(s,"goalDone") }
 ];
+
+/* 成就判定统一入口。
+   旧实现只在 endGame 里内联判一次 —— 于是"启用虚拟键盘""导入第一份词库"
+   "完成第一次签到"这类不需要打一局就能达成的成就，必须先随便玩一把才会解锁。
+   现在任何可能改变成就状态的操作（改设置、导入词库、签到…）都能即时判定。 */
+function checkAchievements(){
+  const s=S();
+  if(!s) return [];
+  const unlocked=[];
+  for(const a of ACHIEVEMENTS){
+    if(!s.ach[a.id] && a.chk(s)){ s.ach[a.id]=Date.now(); unlocked.push(a); }
+  }
+  return unlocked;
+}
+/* 即时判定并提示（设置 / 导入 / 签到等非对局场景使用） */
+function awardAchievements(){
+  const unlocked=checkAchievements();
+  if(!unlocked.length) return [];
+  for(const a of unlocked) toast("🏆 解锁成就："+a.nm);
+  saveStore();
+  return unlocked;
+}
 const RANKS = [
   { id:"bronze", nm:"青铜", min:0 },{ id:"silver", nm:"白银", min:20 },
   { id:"gold",   nm:"黄金", min:35 },{ id:"platinum",nm:"铂金",min:50 },
@@ -1190,6 +1212,7 @@ function doCheckin(){
   let leveled=false;
   while(s.xp>=lvlNeed(s.lvl)){ s.xp-=lvlNeed(s.lvl); s.lvl++; s.sp++; leveled=true; }
   saveStore();
+  awardAchievements();   // "初次签到""七日之约""月度常客"：签到即解锁，不必等下一局
   return { coins:rw.coins, xp:rw.xp, streak:ci.chain, cycleDay, tier:cycleDay,
            label:rw.label, bonus:cycleDay===1&&ci.chain>1, leveled };
 }
@@ -1682,26 +1705,32 @@ function getBackfill(){
 function buildCustomUnits(text, preferLang){
   const units=[];
   const clean=String(text||"").slice(0,4000);
-  // 英文词
-  const enWords=clean.match(/[A-Za-z][A-Za-z'-]*/g)||[];
-  for(const w of enWords){
-    if(w.length<2||w.length>24) continue;
-    units.push({ lang:"en", text:w, syl:[w], input:w });
-  }
-  // 中文：提取汉字串
-  const cnRuns=clean.match(/[一-龥]+/g)||[];
-  for(const run of cnRuns){
-    // 每 2-4 个汉字切一个词（便于阅读）
-    for(let i=0;i<run.length;){
-      const len=Math.min(2+Math.floor(Math.random()*3), run.length-i);
-      const chunk=run.slice(i,i+len); i+=len;
-      const syl=[], texts=[];
-      for(const c of chunk){
-        const p=hanziToSyl(c);
-        syl.push(p || c);        // 未收录的字：直接用汉字本身当输入（练熟即可）
-        texts.push(c);
+  // 单次扫描，按原文顺序切分（英文词 / 汉字串交替出现时也保持原顺序）。
+  //   旧实现先把所有英文词挑出来、再处理所有汉字，中英混排的课文会被打乱，
+  //   而词库练习的卖点正是"练我的文章"，顺序必须与原文一致。
+  //   切分长度也必须确定：旧实现用 Math.random() 决定每段 2~4 个字，
+  //   导致"预览"与"保存"两次调用分词不同（预览说 12 个单元，保存后是 14 个），
+  //   同一段文本两次导入结果也不一样。
+  const re=/[A-Za-z][A-Za-z'-]*|[一-龥]+/g;
+  let m;
+  while((m=re.exec(clean))!==null){
+    const tok=m[0];
+    if(/[A-Za-z]/.test(tok[0])){
+      // 英文词：过短或过长的不作为练习单元
+      if(tok.length<2||tok.length>24) continue;
+      units.push({ lang:"en", text:tok, syl:[tok], input:tok });
+    }else{
+      // 汉字串：每 2 个汉字切一个词（固定长度，保证可复现）
+      for(let i=0;i<tok.length;i+=2){
+        const chunk=tok.slice(i,i+2);
+        const syl=[], texts=[];
+        for(const c of chunk){
+          const p=hanziToSyl(c);
+          syl.push(p || c);        // 未收录的字：直接用汉字本身当输入（练熟即可）
+          texts.push(c);
+        }
+        units.push({ lang:"cn", text:texts.join(""), syl, input:syl.join("") });
       }
-      units.push({ lang:"cn", text:texts.join(""), syl, input:syl.join("") });
     }
   }
   if(!units.length) return [];
@@ -1771,10 +1800,44 @@ function snapshotBase(store){
       // 按键统计必须深拷贝：浅拷贝会让基线与实时数据共享同一个 {n,s} 对象，
       // 局内累加时把基线一起改掉，导致多标签页合并算不出真实增量。
       keys:Object.fromEntries(Object.entries(st.keys||{}).map(([k,v])=>[k,{n:(v&&v.n)||0,s:(v&&v.s)||0}])),
-      wrongWords:Object.assign({}, (s&&s.wrongWords)||{})
+      // 错词本同样必须深拷贝：recordWrongWord 是就地修改（prev.n++），
+      // 浅拷贝会让基线跟着实时数据一起变 —— 两个标签页各错 3 次同一个词，
+      // 合并后本该是 1+3+3=7，实际只会得到 max(4,4)=4，另一个标签页的错次被吞掉。
+      wrongWords:Object.fromEntries(Object.entries((s&&s.wrongWords)||{}).map(([k,v])=>[k,{
+        n:(v&&v.n)||0, last:(v&&v.last)||0, lang:v&&v.lang, text:v&&v.text,
+        input:v&&v.input, syl:Array.isArray(v&&v.syl)?v.syl.slice():[]
+      }]))
     });
   }
   return out;
+}
+/* 把另一个标签页的存档就地同步到当前 STORE。
+   旧实现是 STORE=loadStore() 整体替换 —— 这会让已打开的弹窗
+   （自定义词库、词库管理…）里持有的槽对象引用变成"孤儿"：
+   弹窗往那个旧对象里写词库，随后 saveStore() 写的是新 STORE，
+   于是玩家的修改被静默丢弃。这里保留槽对象身份，只更新其内容。 */
+function syncStoreInPlace(fresh){
+  if(!fresh) return;
+  const slots=fresh.slots||[];
+  // 槽位数量可能不同（另一页增删了槽），按需补齐
+  while(STORE.slots.length<slots.length) STORE.slots.push(newSlotData("存档 "+(STORE.slots.length+1)));
+  for(let i=0;i<slots.length;i++){
+    const ns=slots[i];
+    const cur=STORE.slots[i];
+    if(!ns) continue;
+    if(!cur){ STORE.slots[i]=ns; continue; }
+    // 就地更新：保留对象身份，先删掉存档里已不存在的字段
+    for(const k of Object.keys(cur)) if(!(k in ns)) delete cur[k];
+    Object.assign(cur, ns);
+  }
+  if(fresh.settings) STORE.settings=fresh.settings;
+  if(fresh.daily) STORE.daily=fresh.daily;
+  if(fresh.checkin) STORE.checkin=fresh.checkin;
+  if(fresh.goal) STORE.goal=fresh.goal;
+  STORE.active=fresh.active;
+  STORE.rev=fresh.rev;
+  STORE.savedAt=fresh.savedAt;
+  _loadBase=snapshotBase(STORE);
 }
 function loadStore(){
   try{
@@ -1798,6 +1861,22 @@ function loadStoreFrom(d){
       merged.stats=Object.assign({ games:0, chars:0, words:0, time:0, bestWpm:0, bestCombo:0,
         bestScore:0, accSum:0, accN:0, byMode:{}, byLang:{cn:0,en:0}, keys:{}, ghost:null, modeBest:{},
         rhythm:[], rhythmBest:null }, s&&s.stats);
+      // 按键统计校验：条目必须是 {n:number, s:number}。
+      //   旧实现不校验结构，导入的存档里只要有一条脏数据（如 {"a":null}），
+      //   统计页的 v.n 就会抛 TypeError，整个统计页白屏。
+      if(!merged.stats.keys || typeof merged.stats.keys!=="object" || Array.isArray(merged.stats.keys)){
+        merged.stats.keys={};
+      } else {
+        const kk=Object.keys(merged.stats.keys);
+        for(const k of kk){
+          const v=merged.stats.keys[k];
+          if(!v || typeof v!=="object" || typeof v.n!=="number" || !isFinite(v.n)){
+            delete merged.stats.keys[k];   // 脏条目直接丢弃，不影响其他键
+          } else {
+            merged.stats.keys[k]={ n:v.n, s:(typeof v.s==="number" && isFinite(v.s))?v.s:0 };
+          }
+        }
+      }
       // 节奏数据校验：结构不合法则丢弃，避免污染统计
       if(merged.stats.rhythm && !Array.isArray(merged.stats.rhythm)) merged.stats.rhythm=[];
       if(merged.stats.rhythm && merged.stats.rhythm.length>600) merged.stats.rhythm=merged.stats.rhythm.slice(-600);
@@ -2008,9 +2087,19 @@ function mergeStores(disk, mem){
    level 1 = 温和（只丢最老的历史）
    level 2 = 激进（错词本、词库原文、按键统计都可再生，进一步瘦身） */
 function compactStore(store, level){
-  const s=store.slots&&store.slots[store.active];
-  if(!s) return false;
   const lv=level||1;
+  let changed=false;
+  // 对所有存档槽分别裁剪：配额是整个 origin 共享的，
+  //   旧实现只裁剪当前槽（store.active）—— 若体积大户在另一个槽里，
+  //   "清理冗余"按钮点了也几乎不减小总体占用，配额超限时更救不了场。
+  for(const s of (store&&store.slots)||[]){
+    if(compactSlot(s, lv)) changed=true;
+  }
+  return changed;
+}
+/* 裁剪单个存档槽：level 1 = 温和，2 = 激进，3 = 极限 */
+function compactSlot(s, lv){
+  if(!s) return false;
   let changed=false;
   // 1) 历史记录：趋势图只用最近 12 条
   const histLimit = lv===1 ? 12 : 5;
@@ -2112,10 +2201,16 @@ function saveStore(){
     return true;
   }catch(e){
     // ② 配额超限：分级裁剪后重试（温和 → 激进 → 极限）
+    //    注意必须在"副本"上裁剪：旧实现直接 compactStore(STORE, lv) 就地改内存存档，
+    //    一旦三级裁剪全部失败（配额仍不够），内存里的错词本/词库已经被清空了，
+    //    而盘上还是旧数据 —— 下一次保存就会把这份被清空的存档真的写进去，
+    //    玩家等于白丢一次进度。裁剪成功才提交，失败则原样保留内存数据。
     for(const lv of [1,2,3]){
       try{
-        compactStore(STORE, lv);
-        localStorage.setItem(SAVE_KEY, JSON.stringify(STORE));
+        const cand=JSON.parse(JSON.stringify(STORE));
+        compactStore(cand, lv);
+        localStorage.setItem(SAVE_KEY, JSON.stringify(cand));
+        STORE=cand;
         if(typeof toast==="function") toast(lv===1?"💾 存储空间紧张，已自动清理部分历史数据"
           :lv===2?"💾 存储空间很紧张，已大幅精简数据":"💾 存储空间告急，仅保留核心进度");
         _loadBase=snapshotBase(STORE);
@@ -2422,7 +2517,14 @@ function startGame(dailyCfg){
       G.custom=_pendingTrainUnits;
       G.customName=_pendingTrainName||"专项训练";
       _pendingTrainUnits=null; _pendingTrainName="";
-    } else {
+    }
+    // 一次性指定词库（词库管理里点了某一本的"练习"，或刚导入完）
+    else if(_pendingLibUnits && _pendingLibUnits.length){
+      G.custom=_pendingLibUnits;
+      G.customName=_pendingLibName||"词库";
+      _pendingLibUnits=null; _pendingLibName="";
+    }
+    else{
     // s.customWords 是词库数组，每项形如 {name, raw, units:[...]}
     const lib=(s.customWords||[]).filter(w=>w&&Array.isArray(w.units)&&w.units.length);
     if(lib.length){
@@ -2673,11 +2775,17 @@ function onMistake(ch){
   // 错词本：任何模式的失误都记录（精准模式整词重来，也应计入）
   const curUnit=G.units[G.idx];
   if(curUnit) recordWrongWord(curUnit);
-  // 连击结算：心境(zen) → 连击减半；稳键(steady) → 按等级保留一部分历史最高连击
+  // 连击结算：心境(zen) → 连击减半；稳键(steady) → 按等级保留一部分连击。
+  //   注意基准必须是"失误瞬间的连击"，而不是本局历史最高连击 G.maxCombo：
+  //   旧实现用 maxCombo，导致打完 250 连击后手抖失误一次，
+  //   连击会凭空涨到 62（凭空送连击，还会刷高"最高连击"成就与得分倍率）。
+  //   修正后保留的连击永远不超过失误前的连击。
   const zen=sk.zen||0, steady=sk.steady||0;
-  if(zen>=1) G.combo=Math.floor(G.combo/2);
-  else G.combo=0;
-  if(steady>0) G.combo=Math.max(G.combo, Math.floor(G.maxCombo*steady*0.25));
+  const comboBefore=G.combo;
+  let kept=0;
+  if(zen>=1) kept=Math.floor(comboBefore/2);
+  if(steady>0) kept=Math.max(kept, Math.floor(comboBefore*steady*0.25));
+  G.combo=kept;
   if(focusOn()) G.immuneUntil=Date.now()+1000;
   Audio2.err();
   const area=$("#playArea");
@@ -3478,7 +3586,12 @@ function endGame(){
   const vk=$("#vkb"); if(vk) vk.classList.remove("on");
   Audio2.finish();
   const wpm=wpmOf(G.correct,G.elapsed);
-  const acc=G.correct+G.wrong>0?Math.round(G.correct/(G.correct+G.wrong)*100):100;
+  // 一局都没打出来（挂机到时限结束）时，准确率不能算 100%：
+  //   否则玩家只要开一局放着不动，就能白嫖每日"准确率"目标奖励，
+  //   还会把平均准确率一路刷成 100%。
+  //   这里把"没输入过"记为 0 分母（既不计入平均，也不推进每日目标）。
+  const typedChars=G.correct+G.wrong;
+  const acc=typedChars>0?Math.round(G.correct/typedChars*100):0;
   const s=S();
   if(!s.flags) s.flags={};
   const isCN=G.lang==="cn";
@@ -3496,7 +3609,9 @@ function endGame(){
   }
   if(G.maxCombo>s.stats.bestCombo){ s.stats.bestCombo=G.maxCombo; newRec.push("连击"); }
   s.stats.games++; s.stats.chars+=G.correct; s.stats.words+=G.words; s.stats.time+=G.elapsed;
-  s.stats.accSum+=acc; s.stats.accN++;
+  // 只统计"真的打出了字"的局：空局的准确率没有参考意义，
+  //   混进平均值会把玩家的真实准确率拉低。
+  if(typedChars>0){ s.stats.accSum+=acc; s.stats.accN++; }
   s.stats.byMode[G.mode]=(s.stats.byMode[G.mode]||0)+1;
   // 各模式独立最佳（不同模式时长不同，WPM 不可横向比较）
   if(!s.stats.modeBest) s.stats.modeBest={};
@@ -3529,7 +3644,10 @@ function endGame(){
     const prev=s.stats.rhythmBest;
     if(!prev || rs.score>(prev.score||0)) s.stats.rhythmBest=rs;
   }
-  if(G.mode==="precision"&&G.perfect) s.flags.perfect=true;
+  // "百发百中"：必须真的打了字且零失误。
+  //   旧实现只看 G.perfect，而 G.perfect 在没失误时恒为 true ——
+  //   于是在精准模式里挂机 120 秒不碰键盘也能解锁。
+  if(G.mode==="precision"&&G.perfect&&G.correct>0) s.flags.perfect=true;
   if(G.mode==="climb"&&G.stage>=10) s.flags.peak=true;
   if(G.mode==="survival"&&G.elapsed>=120) s.flags.survive120=true;
   if(G.mode==="review"){ s.flags.reviewDone=true; s.flags.planFixed=true; }
@@ -3558,10 +3676,7 @@ function endGame(){
     endSaveBatch();
   }
   // 成就
-  const unlocked=[];
-  for(const a of ACHIEVEMENTS){
-    if(!s.ach[a.id] && a.chk(s)){ s.ach[a.id]=Date.now(); unlocked.push(a); }
-  }
+  const unlocked=checkAchievements();
   saveStore();
   renderResult({wpm,acc,finalScore,xp,coins,newRec,unlocked,levelUp:s.lvl>before,goalHit,modeBest:mb});
   showView("Result");
@@ -3574,6 +3689,9 @@ function quitGame(){
   const pm=document.querySelector("#pauseMask");
   if(pm && pm.remove) pm.remove();
   const vk=$("#vkb"); if(vk) vk.classList.remove("on");
+  // 放弃本局也要保住已收集的错词本：错词是玩家明确收集的复习素材，
+  //   中途退出不该让它们凭空消失（此前只有结算才落盘）。
+  try{ saveStore(); }catch(e){}
   showView("Home"); renderHome();
 }
 function renderResult(r){
@@ -3981,16 +4099,30 @@ function renderRhythm(st){
   const color = v.level==="great"?"var(--acc)": v.level==="good"?"var(--good)"
               : v.level==="mid"?"var(--warn)": v.level==="low"?"var(--bad)":"var(--bad)";
   const best=st.rhythmBest;
-  // 分布直方图：把击键间隔分 6 档
+  // 分布直方图：把击键间隔分 6 档。
+  //   注意分档是"相对最快~最慢"等分的，标签必须按实际档位边界生成：
+  //   旧实现把标签写死成 <100 / 100-150 这类绝对毫秒值，
+  //   于是玩家看到的第一档（实际是最快的那一档）被标成 "<100ms"，
+  //   整张图的刻度与真实数据对不上。
+  //   同时直方图必须与评分使用同一份样本（rhythmStats 会过滤掉 >=5000ms 的长停顿），
+  //   否则图里的样本数与评分口径不一致。
+  const samples=all.filter(x=>typeof x==="number"&&x>0&&x<5000);
   const buckets=new Array(6).fill(0);
   const lo=rs.fastest, hi=rs.slowest, span=Math.max(1,hi-lo);
-  for(const x of all){
+  for(const x of samples){
     let i=Math.floor((x-lo)/span*6);
     if(i<0)i=0; if(i>5)i=5;
     buckets[i]++;
   }
   const maxB=Math.max(1,...buckets);
-  const labels=["<100","100-150","150-200","200-300","300-450",">450"];
+  // 每一档的实际毫秒边界（与上面的分档方式严格对应）
+  const edges=[];
+  for(let i=0;i<=6;i++) edges.push(Math.round(lo+span*i/6));
+  const labels=[];
+  for(let i=0;i<6;i++){
+    const a=edges[i], b=edges[i+1];
+    labels.push(a===b ? `${a}` : `${a}~${b}`);
+  }
   let html=`<div class="rhythm-score">
     <div class="rhythm-ring" style="background:conic-gradient(${color} ${rs.score*3.6}deg,var(--line) 0)">
       <i></i><span class="rs-num">${rs.score}</span>
@@ -4008,7 +4140,7 @@ function renderRhythm(st){
     ${best?`<div class="rhythm-stat"><div class="rk">历史最佳</div><div class="rv">${best.score||rs.score} 分</div></div>`:""}
   </div>
   <div class="rhythm-hist">
-    <div style="font-size:11.5px;color:var(--dim2);margin-bottom:4px">击键间隔分布（共 ${all.length} 次采样）—— 分布越集中，节奏越稳</div>`;
+    <div style="font-size:11.5px;color:var(--dim2);margin-bottom:4px">击键间隔分布（共 ${samples.length} 次采样）—— 分布越集中，节奏越稳</div>`;
   for(let i=0;i<6;i++){
     const w=Math.round(buckets[i]/maxB*100);
     html+=`<div class="rh-row"><span style="min-width:64px;font-family:var(--mono)">${labels[i]}ms</span>
@@ -4209,11 +4341,15 @@ function openTrainingPlan(){
 /* 执行训练建议 */
 function runTrainingAction(p, body){
   const s=S();
-  s.flags.planActed=true;
+  // 标记"已按处方执行"：必须在真正开始训练之后才置位。
+  //   旧实现一进来就置位，于是"错词本是空的"这种提前 return 的分支
+  //   也会解锁"知错能改"成就 —— 玩家什么都没练就拿到了。
+  const markActed=()=>{ s.flags.planActed=true; };
   switch(p.action){
     case "review": {
       const wu=wrongWordUnits();
       if(!wu.length){ toast("错词本是空的，先打几局吧"); return; }
+      markActed();
       dismissModal(body);
       setConfig({mode:"review"}); startGame();
       break;
@@ -4221,6 +4357,7 @@ function runTrainingAction(p, body){
     case "weak": {
       const units=weakKeyUnits(p.params.keys);
       if(!units.length){ toast("没有找到相关词条"); return; }
+      markActed();
       dismissModal(body);
       startCustomTraining(units, "慢键专项");
       break;
@@ -4228,11 +4365,13 @@ function runTrainingAction(p, body){
     case "finger": {
       const units=fingerUnits(p.params.finger);
       if(!units.length){ toast("没有找到相关词条"); return; }
+      markActed();
       dismissModal(body);
       startCustomTraining(units, FINGER_NAMES[p.params.finger]+"专项");
       break;
     }
     case "rhythm": {
+      markActed();
       dismissModal(body);
       setConfig({mode:"sprint",diff:"easy",lang:"cn"});
       startGame();
@@ -4252,10 +4391,12 @@ function runTrainingAction(p, body){
       break;
     }
     default: {
+      markActed();
       dismissModal(body);
       setConfig({mode:"sprint"}); startGame();
     }
   }
+  saveStore();
 }
 
 /* 用自定义单元开一局专项训练（不写入玩家词库，仅本次生效） */
@@ -4268,6 +4409,10 @@ function startCustomTraining(units, name){
 }
 /* 一次性专项训练单元（由训练处方注入，不落盘） */
 let _pendingTrainUnits=null, _pendingTrainName="";
+/* 一次性指定词库（由词库管理 / 导入流程注入，不落盘）：
+   词库管理里每行都有独立的"练习"按钮，若不指定就会把所有词库拼起来一起练，
+   玩家点"练习 A"结果先练了 B，与按钮语义不符。 */
+let _pendingLibUnits=null, _pendingLibName="";
 
 /* ------------------------------------------------------------ 模态弹窗管理 */
 /* 无障碍要点（ARIA modal dialog 模式）：
@@ -4478,6 +4623,7 @@ function openSettings(){
       s.vkb=b.dataset.v;
       body.querySelectorAll("#segVkb button").forEach(x=>x.classList.toggle("on",x===b));
       saveStore(); updateVkbVisibility();
+      awardAchievements();   // "随时随地"成就：启用虚拟键盘即可解锁，不必先打一局
       toast(b.dataset.v==="always"?"已开启虚拟键盘":b.dataset.v==="never"?"已关闭虚拟键盘":"虚拟键盘将自动判断");
     };
   });
@@ -4592,6 +4738,9 @@ function openCustomImport(){
     const units=buildCustomUnits(ta.value);
     if(!units.length){ toast("没有解析到可练习的内容"); return; }
     const raw=ta.value.slice(0,4000);
+    // 写入前重新取当前槽：弹窗打开期间可能被另一个标签页同步过，
+    // 旧代码持有的是打开弹窗那一刻的槽对象引用，写进去的内容会丢失。
+    const s=S();
     const has=(s.customWords||[]).length>0;
     const lib={ name:(has?("词库 "+(s.customWords.length+1)):"我的词库"), raw, units };
     if(!s.customWords) s.customWords=[];
@@ -4602,7 +4751,10 @@ function openCustomImport(){
     saveStore(); renderHome();
     dismissModal(body);
     toast("✅ 已导入 "+units.length+" 个练习单元");
+    awardAchievements();   // "博闻强记""博采众长"：导入词库即解锁
     setConfig({mode:"custom"});
+    // 只练刚导入的这一份，而不是把所有词库拼起来一起练
+    _pendingLibUnits=units.slice(); _pendingLibName=lib.name;
     startGame();
   };
   body.onclick=e=>{ if(e.target===body) dismissModal(body); };
@@ -4638,7 +4790,14 @@ function openLibraryManager(){
       const btns=document.createElement("div");
       btns.style.display="flex"; btns.style.gap="6px"; btns.style.flex="0 0 auto";
       const bp=document.createElement("button"); bp.className="btn sm"; bp.textContent="练习";
-      bp.onclick=()=>{ dismissModal(body); setConfig({mode:"custom"}); startGame(); };
+      // 只练这一本：旧实现不指定词库，startGame 会把所有词库拼起来，
+      // 玩家点"练习 A"却先练了 B，与按钮语义不符。
+      bp.onclick=()=>{
+        dismissModal(body);
+        setConfig({mode:"custom"});
+        _pendingLibUnits=(lib.units||[]).slice(); _pendingLibName=lib.name||"词库";
+        startGame();
+      };
       const br=document.createElement("button"); br.className="btn sm"; br.textContent="改名";
       br.onclick=()=>{
         const nm=prompt("词库名称",lib.name||"");
@@ -4647,7 +4806,14 @@ function openLibraryManager(){
       const bd=document.createElement("button"); bd.className="btn sm"; bd.textContent="删除"; bd.style.color="var(--bad)";
       bd.onclick=()=>{
         if(!confirm("删除词库「"+(lib.name||"")+"」？")) return;
-        s.customWords.splice(idx,1); saveStore(); dismissModal(body); openLibraryManager(); renderHome();
+        // 按名字在当前槽里重新定位并删除：
+        //   旧代码用弹窗打开时捕获的槽对象 + 下标，跨标签页同步后
+        //   那个下标可能已指向别的词库，甚至写进一个已被替换的旧对象。
+        const cur=S();
+        const list=(cur.customWords||[]);
+        const i=list.findIndex(x=>x===lib || (x&&x.name)===(lib&&lib.name));
+        if(i>=0) list.splice(i,1);
+        saveStore(); dismissModal(body); openLibraryManager(); renderHome();
       };
       btns.appendChild(bp); btns.appendChild(br); btns.appendChild(bd);
       d.appendChild(btns);
@@ -5085,9 +5251,11 @@ const GUIDE_STEPS=[
 ];
 let _guideIdx=0;
 function openGuide(idx){
-  // 避免重复叠层：先移除已存在的引导
+  // 避免重复叠层：先移除已存在的引导。
+  //   必须走 dismissModal —— 直接 remove() 会绕过弹窗栈，留下失效条目
+  //   （后续按键会被误判为"弹窗打开"而全部吞掉）。
   const exist=document.querySelector("#guideMask");
-  if(exist && exist.remove) exist.remove();
+  if(exist) dismissModal(exist);
   _guideIdx=idx||0;
   const body=document.createElement("div");
   body.className="mask"; body.id="guideMask";
@@ -5160,8 +5328,18 @@ function importSaveData(text){
     const d=JSON.parse(text);
     if(!d || !Array.isArray(d.slots) || !d.slots.length) throw new Error("不是有效的存档文件");
     if(!confirm("导入将覆盖当前全部数据，确定继续？\n（建议先导出备份）")) return false;
-    STORE=loadStoreFrom(d);
-    saveStore();
+    const fresh=loadStoreFrom(d);
+    // 导入的语义是"覆盖"，必须直接落盘，不能走 saveStore 的多标签页合并路径：
+    //   备份文件的 rev 通常比盘上旧（导出得早），合并逻辑会把盘上的旧存档
+    //   又并回来 —— 于是"导入备份"实际变成"合并备份"，等级/星尘/成就全都取两边的较大值，
+    //   玩家想恢复到备份之前的状态根本做不到。
+    //   这里把 rev 提到盘上版本之上再直接写入，保证导入后 STORE 就是备份本身。
+    const disk=readDiskStore();
+    fresh.rev=Math.max(Number(disk&&disk.rev)||0, Number(fresh.rev)||0)+1;
+    fresh.savedAt=Date.now();
+    localStorage.setItem(SAVE_KEY, JSON.stringify(fresh));
+    STORE=fresh;
+    _loadBase=snapshotBase(STORE);
     restoreConfig(); applySettingsToDOM(); applyTheme(); renderHome();
     toast("✅ 存档已导入");
     return true;
@@ -5183,7 +5361,15 @@ function storageReport(){
     { k:"自定义词库", v:storeSize(cur.customWords||[]), n:(cur.customWords||[]).length, unit:"个", limit:20 },
     { k:"按键统计", v:storeSize((cur.stats&&cur.stats.keys)||{}), n:Object.keys((cur.stats&&cur.stats.keys)||{}).length, unit:"键", limit:"—" }
   ];
-  return { total, per, parts, quota:5*1024*1024, pct:Math.min(100, total/(5*1024*1024)*100) };
+  // 各存档槽的体积：配额是整个 origin 共享的，只报当前槽会让玩家误判
+  //   "体积不大"。哪个槽最占地方一目了然，清理才知道往哪儿下手。
+  const slots=STORE.slots.map((s,i)=>({
+    i, name:(s&&s.name)||("存档 "+(i+1)),
+    active:i===STORE.active, size:per[i],
+    libs:(s&&Array.isArray(s.customWords))?s.customWords.length:0,
+    wrong:(s&&s.wrongWords)?Object.keys(s.wrongWords).length:0
+  }));
+  return { total, per, slots, parts, quota:5*1024*1024, pct:Math.min(100, total/(5*1024*1024)*100) };
 }
 
 function openDataPanel(){
@@ -5210,6 +5396,14 @@ function openDataPanel(){
           ${p.limit!=="—"&&p.n>=p.limit?'<span class="w">已达上限</span>':""}
         </div>`).join("")}
       </div>
+      <div class="dr-parts" style="margin-top:12px">
+        <div style="font-size:11.5px;color:var(--dim2);margin-bottom:4px">各存档槽占用（配额由全部存档共享）</div>
+        ${rep.slots.map(s=>`<div class="dr-row">
+          <span class="k">${esc(s.name)}${s.active?' <span class="w">当前</span>':""}</span>
+          <span class="n">${s.libs} 词库 · ${s.wrong} 错词</span>
+          <span class="s">${sz(s.size)}</span>
+        </div>`).join("")}
+      </div>
     </div>
     <div class="data-actions">
       <button type="button" class="btn" id="dpExport">📤 导出存档</button>
@@ -5230,7 +5424,7 @@ function openDataPanel(){
     const f=file.files&&file.files[0];
     if(!f) return;
     const rd=new FileReader();
-    rd.onload=()=>{ importSaveData(String(rd.result||"")); dismissModal(body); };
+    rd.onload=()=>{ if(importSaveData(String(rd.result||""))) dismissModal(body); };
     rd.onerror=()=>toast("❌ 文件读取失败");
     rd.readAsText(f);
   };
@@ -5343,7 +5537,7 @@ function bind(){
       const mine=S();
       if(oa && mine && JSON.stringify(oa.stats)!==JSON.stringify(mine.stats)){
         toast("⚠️ 检测到另一个标签页也在使用存档，已同步为最新数据");
-        STORE=loadStore();
+        syncStoreInPlace(loadStore());
         applyTheme(); renderHome();
       }
     }catch(e){}
